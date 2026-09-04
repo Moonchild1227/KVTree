@@ -58,15 +58,15 @@ kvtree serve --dir ./data/kvmon_v2 --turns ./data/turns.jsonl
 ```
 kvtree monitor    --hosts --base-port --dp-size --topic --out-dir
                   --snapshot-interval --tree-dump-interval --duration
-                  --sub-hwm --strict-schema --kv-events-py
+                  --sub-hwm --schema
 kvtree metrics    --url --out --interval --duration
 kvtree serve      --dir --turns --port --bind
 kvtree reprocess  --raw --out --snapshot-interval --tree-dump-interval
 ```
 
-`--strict-schema` 用引擎自带的 `kv_events.py` 解码；默认用内置的宽松 schema，
-因为部分引擎发出的 `token_ids` 是 `(tok, next)` 成对结构，与其自身声明的
-`list[int]` 不符，用原版 schema 会解码失败。
+`--schema /path/to/kv_events.py` 严格使用指定的引擎 schema 解码；默认使用内置的
+宽松 schema，因为部分引擎发出的 `token_ids` 是 `(tok, next)` 成对结构，与其自身
+声明的 `list[int]` 不符，用原版 schema 会解码失败。
 
 ## 看板
 

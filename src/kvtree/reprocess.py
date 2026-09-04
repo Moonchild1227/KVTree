@@ -67,7 +67,7 @@ def main(argv=None) -> int:
                     dest="tree_int")
     a = ap.parse_args(argv)
 
-    kve = m.load_kv_events_module("/nonexistent", relaxed=True)
+    kve = m.load_kv_events_module()
     out = Path(a.out)
     (out / "trees").mkdir(parents=True, exist_ok=True)
     snap_fp = (out / "snapshots.jsonl").open("w")

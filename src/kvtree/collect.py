@@ -103,14 +103,18 @@ class _MirrorModule:
     KVEventBatch = _KVEventBatch
 
 
-def load_kv_events_module(path: str, relaxed: bool = False):
+def load_kv_events_module(path: str | None = None):
+    if path is None:
+        return _MirrorModule()
     p = Path(path)
-    if p.exists() and not relaxed:
-        spec = importlib.util.spec_from_file_location("sglang_kv_events", str(p))
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        return m
-    return _MirrorModule()
+    if not p.is_file():
+        raise FileNotFoundError(f"schema file not found: {p}")
+    spec = importlib.util.spec_from_file_location("sglang_kv_events", str(p))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load schema module: {p}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +298,7 @@ class StreamState:
 class Monitor:
     def __init__(self, args):
         self.args = args
-        self.kve = load_kv_events_module(
-            args.kv_events_py, relaxed=getattr(args, 'relaxed_schema', False)
-        )
+        self.kve = load_kv_events_module(args.schema)
         self.decoder = msgspec.msgpack.Decoder(self.kve.KVEventBatch)
         self.out = Path(args.out_dir)
         self.out.mkdir(parents=True, exist_ok=True)

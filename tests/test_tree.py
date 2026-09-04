@@ -6,14 +6,14 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from kvtree import collect
+from kvtree import cli, collect
 from kvtree.reprocess import to_event
 
 FIXTURE = Path(__file__).parent / "fixtures" / "raw_events.jsonl"
 
 
 def replay(path=FIXTURE):
-    kve = collect.load_kv_events_module("", relaxed=True)
+    kve = collect.load_kv_events_module()
     streams = {}
     for line in path.read_text().splitlines():
         r = json.loads(line)
@@ -29,7 +29,7 @@ def replay(path=FIXTURE):
 def test_paired_token_ids_decode():
     """DSv4 emits per-page tokens as (tok, next) pairs; the engine's own
     `token_ids: list[int]` annotation cannot decode that. The mirror must."""
-    kve = collect.load_kv_events_module("", relaxed=True)
+    kve = collect.load_kv_events_module()
     enc = msgspec.msgpack.Encoder()
     dec = msgspec.msgpack.Decoder(kve.KVEventBatch)
     for tokens in ([(1, 2), (3, 4)], [1, 2, 3, 4]):
@@ -81,3 +81,41 @@ def test_two_streams_are_independent():
     assert len(streams) == 2
     a, b = (set(s.blocks) for s in streams.values())
     assert a and b and a != b
+
+
+def test_monitor_cli_finishes_once(monkeypatch, tmp_path):
+    calls = {"run": 0, "finish": 0}
+
+    class FakeMonitor:
+        def __init__(self, args):
+            assert args.schema is None
+
+        def stop(self, *_):
+            pass
+
+        def run(self):
+            calls["run"] += 1
+            self.finish()
+
+        def finish(self):
+            calls["finish"] += 1
+
+    monkeypatch.setattr(collect, "Monitor", FakeMonitor)
+    args = cli.build_parser().parse_args([
+        "monitor", "--out-dir", str(tmp_path), "--duration", "0.01",
+    ])
+    assert args.fn(args) == 0
+    assert calls == {"run": 1, "finish": 1}
+
+
+def test_explicit_schema_path(tmp_path):
+    schema = tmp_path / "kv_events.py"
+    schema.write_text("SENTINEL = 42\n")
+    module = collect.load_kv_events_module(str(schema))
+    assert module.SENTINEL == 42
+
+
+def test_missing_schema_path_fails_clearly(tmp_path):
+    missing = tmp_path / "missing.py"
+    with pytest.raises(FileNotFoundError, match="schema file not found"):
+        collect.load_kv_events_module(str(missing))
