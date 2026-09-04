@@ -33,6 +33,7 @@ let hidden={'c_pool|free':true};    // "panelId|series" -> true
 let hover=null;                     // {ts, src, cx, cy, py}
 let sel=null;                       // drag-zoom selection {src,t0,t1}
 let follow=true,rfTimer=null,view={x:20,y:14,k:1,touched:false};
+let treeReq=0;                      // discard stale tree loads while scrubbing
 
 const TSP=[{l:'全部 → now (一直累积)',s:-1},
   {l:'Last 5 minutes',s:300},{l:'Last 15 minutes',s:900},
@@ -264,7 +265,7 @@ function drawCursors(x,c,m){
     x.fillStyle='#6e9fff22';x.fillRect(a,PADT,b-a,c.height-PADT-PADB);}
   const ts=curTs();
   if(ts&&ts>=m.t0&&ts<=m.t1){
-    x.strokeStyle='#ccccdcaa';x.lineWidth=1.5;x.beginPath();
+    x.strokeStyle='#ffffffcc';x.lineWidth=1.5;x.beginPath();
     x.moveTo(m.X(ts),PADT);x.lineTo(m.X(ts),c.height-PADB);x.stroke();}
   if(hover&&hover.ts>=m.t0&&hover.ts<=m.t1){
     const px=m.X(hover.ts);
@@ -426,6 +427,37 @@ function sessTip(m){
 
 /* ---------------- radix tree shape ---------------- */
 function curTs(){return trees.length?trees[+$('scrub').value].ts:null;}
+function syncScrubBounds(){
+  const sc=$('scrub');
+  if(!trees.length){sc.min=0;sc.max=0;sc.value=0;sc.disabled=true;return false;}
+  sc.disabled=false;
+  const[t0,t1]=timeRange();
+  let lo=trees.findIndex(t=>t.ts>=t0);
+  let hi=-1;
+  for(let i=trees.length-1;i>=0;i--)if(trees[i].ts<=t1){hi=i;break;}
+  // A very narrow range can fall between dumps. Pin the scrubber to the
+  // nearest dump so its timestamp remains explicit instead of going blank.
+  if(lo<0||hi<lo){
+    const mid=(t0+t1)/2;
+    let nearest=0,dist=Infinity;
+    trees.forEach((t,i)=>{const d=Math.abs(t.ts-mid);
+      if(d<dist){dist=d;nearest=i;}});
+    lo=hi=nearest;
+  }
+  sc.min=lo;sc.max=hi;
+  const old=+sc.value;
+  const next=follow?hi:Math.max(lo,Math.min(hi,old));
+  sc.value=next;
+  $('tslabel').textContent=trees[next].time;
+  return next!==old;
+}
+async function loadSelectedTree(){
+  if(!trees.length)return;
+  const idx=+$('scrub').value,selected=trees[idx],req=++treeReq;
+  const loaded=await j('/api/tree?ts='+selected.ts);
+  if(req!==treeReq||+$('scrub').value!==idx)return;
+  curTree=loaded;drawTree();
+}
 function collapseChains(n){
   if(!$('collapse').checked)return n;
   function rec(node){
@@ -510,7 +542,10 @@ function drawTreeSvg(g,nodes,links,XS,YS){
 }
 
 /* ---------------- refresh / draw all ---------------- */
-function drawAll(){TS.forEach(drawTS);drawSessions();}
+function drawAll(){
+  if(syncScrubBounds())loadSelectedTree();
+  TS.forEach(drawTS);drawSessions();
+}
 async function refresh(){
   snaps=await j('/api/snapshots');
   trees=await j('/api/trees');
@@ -527,11 +562,10 @@ async function refresh(){
       }
     }
   }
-  const sc=$('scrub');sc.max=Math.max(0,trees.length-1);
-  if(follow||+sc.value>trees.length-1)sc.value=trees.length-1;
+  const sc=$('scrub');
+  syncScrubBounds();
   if(trees.length){
-    $('tslabel').textContent=trees[+sc.value].time;
-    curTree=await j('/api/tree?ts='+trees[+sc.value].ts);
+    await loadSelectedTree();
     const names=Object.keys(curTree.streams).sort(),sel2=$('stream');
     if(sel2.options.length!==names.length)
       sel2.innerHTML=names.map(n=>`<option>${n}</option>`).join('');
@@ -632,8 +666,8 @@ window.addEventListener('mousemove',e=>{
 $('scrub').oninput=async()=>{
   follow=false;$('follow').checked=false;
   $('tslabel').textContent=trees[+$('scrub').value].time;
-  curTree=await j('/api/tree?ts='+trees[+$('scrub').value].ts);
-  drawTree();drawAll();};
+  drawAll();                    // move the shared cursor before the fetch
+  await loadSelectedTree();};
 $('follow').onchange=e=>{follow=e.target.checked;if(follow)refresh();};
 $('fit').onclick=()=>{window._fitAll=!window._fitAll;
   view.touched=false;drawTree();};
