@@ -551,18 +551,10 @@ async function refresh(){
   snaps=await j('/api/snapshots');
   trees=await j('/api/trees');
   try{mets=await j('/api/metrics');}catch(e){mets=[];}
-  // retry turns while empty: the viewer may have been (re)started with --turns
-  // after the page was first opened, and a stale [] would hide the panels
-  if(turns===null||!turns.length){
-    try{turns=await j('/api/turns');}catch(e){turns=turns||[];}
-    if(turns.length){
-      $('sesssec').style.display='block';
-      if(false){
-        const[a,b]=activityRange();range={from:a,to:b};
-        $('trlbl').textContent='有负载区间';window._ranged=true;
-      }
-    }
-  }
+  // turns.jsonl grows while a replay is running. Fetch it on every refresh;
+  // stopping after the first non-empty response freezes the live swimlanes.
+  try{turns=await j('/api/turns');}catch(e){turns=turns||[];}
+  if(turns.length)$('sesssec').style.display='block';
   const sc=$('scrub');
   syncScrubBounds();
   if(trees.length){
