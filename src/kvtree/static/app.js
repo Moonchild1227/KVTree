@@ -3,6 +3,22 @@ const COL={GPU:'#73bf69',CPU_PINNED:'#ff9830',EXTERNAL:'#5794f2',
 const LBL={GPU:'L1 GPU',CPU_PINNED:'L2 CPU_PINNED',EXTERNAL:'L3 EXTERNAL',
            UNKNOWN:'UNKNOWN'};
 const MEDS=['GPU','CPU_PINNED','EXTERNAL','UNKNOWN'];
+// One colour per engine instance / attn-dp rank, used by the "by instance"
+// grouping. Aggregating everything hides which rank is hot.
+const PAL=['#5794f2','#73bf69','#ff9830','#b877d9','#f2cc0c','#e02f44',
+           '#8ab8ff','#c0d8a0'];
+let groupBy='agg';                  // 'agg' | 'rank'
+function streamNames(){
+  const n=new Set();
+  for(const s of snaps)for(const k in (s.streams||{}))n.add(k);
+  return[...n].sort();
+}
+function rankNames(){
+  const n=new Set();
+  for(const m of mets)for(const k in (m.ranks||{}))n.add(k);
+  return[...n].sort();
+}
+function shortName(s){const m=String(s).match(/:(\d+)$/);return m?('port '+m[1]):s;}
 const PADL=54,PADR=10,PADT=8,PADB=17;   // identical on every time panel
 const $=id=>document.getElementById(id);
 let snaps=[],trees=[],turns=null,curTree=null,mets=[];
@@ -96,12 +112,41 @@ function sumStreams(s,f){let v=0;for(const k in (s.streams||{}))v+=f(s.streams[k
 function maxStreams(s,f){let v=0;for(const k in (s.streams||{}))
   v=Math.max(v,f(s.streams[k])||0);return v;}
 
-function seriesTok(){return MEDS.map(k=>({name:LBL[k],color:COL[k],
-  vals:snaps.map(s=>[s.ts,(s.totals[k]||{}).tokens||0])}));}
-function seriesBlk(){return MEDS.map(k=>({name:LBL[k],color:COL[k],
-  vals:snaps.map(s=>[s.ts,(s.totals[k]||{}).blocks||0])}));}
+function perStream(pick){
+  return streamNames().map((n,i)=>({name:shortName(n),color:PAL[i%PAL.length],
+    vals:snaps.map(s=>[s.ts,pick((s.streams||{})[n])||0])}));
+}
+// instance is encoded as a shade of the tier colour, so a grouped panel still
+// answers "which tier" and "which rank" at the same time
+const SHADE=['ff','c0','90','60','40'];
+function perStreamMedium(field){
+  const names=streamNames(),out=[];
+  for(const med of MEDS){
+    const any=snaps.some(s=>names.some(
+      n=>(((s.streams||{})[n]||{}).mediums||{})[med]));
+    if(!any)continue;
+    names.forEach((n,i)=>{
+      out.push({
+        name:LBL[med]+' · '+shortName(n),
+        color:COL[med]+SHADE[i%SHADE.length],
+        vals:snaps.map(s=>[s.ts,
+          ((((s.streams||{})[n]||{}).mediums||{})[med]||{})[field]||0]),
+      });
+    });
+  }
+  return out.length?out:perStream(v=>0);
+}
+function seriesTok(){
+  if(groupBy==='rank')return perStreamMedium('tokens');
+  return MEDS.map(k=>({name:LBL[k],color:COL[k],
+    vals:snaps.map(s=>[s.ts,(s.totals[k]||{}).tokens||0])}));}
+function seriesBlk(){
+  if(groupBy==='rank')return perStreamMedium('blocks');
+  return MEDS.map(k=>({name:LBL[k],color:COL[k],
+    vals:snaps.map(s=>[s.ts,(s.totals[k]||{}).blocks||0])}));}
 
 function seriesShape(){
+  if(groupBy==='rank')return perStream(v=>v&&v.tree&&v.tree.leaves);
   const g=(f)=>snaps.map(s=>[s.ts,f(s)]);
   return[
    {name:'roots',color:'#5794f2',vals:g(s=>sumStreams(s,x=>x.tree&&x.tree.roots))},
@@ -115,6 +160,18 @@ function seriesShape(){
 }
 
 function seriesEvt(){
+  if(groupBy==='rank'){
+    return streamNames().map((n,i)=>{
+      const o=[];
+      for(let j=1;j<snaps.length;j++){
+        const dt=snaps[j].ts-snaps[j-1].ts;if(dt<=0)continue;
+        const a=((snaps[j].streams||{})[n]||{}).stored||0;
+        const b=((snaps[j-1].streams||{})[n]||{}).stored||0;
+        o.push([snaps[j].ts,Math.max(0,a-b)/dt]);
+      }
+      return{name:shortName(n)+' stored/s',color:PAL[i%PAL.length],vals:o};
+    });
+  }
   const rate=key=>{const o=[];
     for(let i=1;i<snaps.length;i++){
       const dt=snaps[i].ts-snaps[i-1].ts;if(dt<=0)continue;
@@ -150,6 +207,17 @@ function seriesConc(){
 }
 function seriesPool(){
   if(!mets.length)return[];
+  if(groupBy==='rank'){
+    const out=[];
+    rankNames().forEach((r,i)=>{
+      const c=PAL[i%PAL.length];
+      out.push({name:'dp'+r+' used',color:c,
+        vals:mets.map(m=>[m.ts,((m.ranks||{})[r]||{}).num_used_tokens||0])});
+      out.push({name:'dp'+r+' idle',color:c+'80',
+        vals:mets.map(m=>[m.ts,((m.ranks||{})[r]||{}).kv_evictable_tokens||0])});
+    });
+    return out;
+  }
   const g=k=>mets.map(m=>[m.ts,(m.total||{})[k]||0]);
   const out=[
    {name:'used (referenced)',color:'#5794f2',vals:g('num_used_tokens')},
@@ -221,6 +289,9 @@ function drawTS(p){
   const x=c.getContext('2d');
   c.width=c.clientWidth;c.height=c.clientHeight;
   x.clearRect(0,0,c.width,c.height);
+  // stacking is right for aggregate tiers, wrong once every series is a
+  // separate instance -- overlaid lines keep both dimensions readable
+  const mode=(groupBy==='rank'&&p.mode==='area')?'line':p.mode;
   const all=p.f(),ss=all.filter(s=>vis(p,s));
   legend(p,all);
   const m=xMapper(c);
@@ -229,7 +300,7 @@ function drawTS(p){
     'No data — 本次 run 没有 client/turns.jsonl':'No data');return;}
   const inR=v=>v[0]>=m.t0-1e-9&&v[0]<=m.t1+1e-9;
   let max=1;
-  if(p.mode==='area'){
+  if(mode==='area'){
     const n=ss.length?ss[0].vals.length:0;
     for(let i=0;i<n;i++){let sum=0;
       for(const s of ss)if(s.vals[i]&&inR(s.vals[i]))sum+=s.vals[i][1];
@@ -238,7 +309,7 @@ function drawTS(p){
   max*=1.08;
   const H=c.height-PADT-PADB,Y=v=>PADT+H-v/max*H;
   axes(x,c,m,max);
-  if(p.mode==='area'){
+  if(mode==='area'){
     const n=ss.length?ss[0].vals.length:0,base=new Array(n).fill(0);
     for(const s of ss){
       x.beginPath();let started=false;
@@ -479,6 +550,10 @@ window.addEventListener('mouseup',()=>{
     drawAll();}
   drag=null;});
 
+$('gb').onchange=e=>{groupBy=e.target.value;
+  document.querySelectorAll('[data-agg]').forEach(el=>{
+    el.textContent=groupBy==='rank'?el.dataset.rank:el.dataset.agg;});
+  drawAll();};
 $('tr').onclick=()=>$('pick').classList.toggle('open');
 TSP.forEach(q=>{const d=document.createElement('div');d.textContent=q.l;
   d.onclick=()=>{

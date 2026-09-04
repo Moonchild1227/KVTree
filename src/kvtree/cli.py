@@ -17,6 +17,7 @@ def _monitor(a) -> int:
         topic=a.topic, out_dir=a.out_dir, snapshot_interval=a.snapshot_interval,
         tree_dump_interval=a.tree_dump_interval, duration=a.duration,
         kv_events_py=a.kv_events_py, relaxed_schema=not a.strict_schema,
+        sub_hwm=a.sub_hwm,
     )
     mon = collect.Monitor(args)
     signal.signal(signal.SIGINT, mon.stop)
@@ -68,6 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--duration", type=float, default=0.0)
     m.add_argument("--kv-events-py", default="",
                    help="decode with the engine's own kv_events.py")
+    m.add_argument("--sub-hwm", type=int, default=0,
+                   help="ZMQ SUB high-water mark; 0 = unlimited (never drop "
+                        "events, at the cost of memory under a burst)")
     m.add_argument("--strict-schema", action="store_true",
                    help="use the engine schema verbatim; the default mirror is "
                         "more permissive (DSv4 emits paired token_ids)")

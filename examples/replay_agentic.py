@@ -23,8 +23,8 @@ k-th assistant message and asks the engine to regenerate it; between turns we
 sleep the recorded tool_elapsed_ms, which is what makes the load agentic (idle
 gaps during which the session's KV blocks sit in the radix tree unused).
 
-Writes turns.jsonl in the same shape RouterBench's client does, so
-tree_viewer.py can show sessions and the KV tree on one axis.
+Writes turns.jsonl in the shape kvtree's session panels expect, so the
+dashboard shows sessions and the KV tree on one shared axis.
 """
 
 from __future__ import annotations

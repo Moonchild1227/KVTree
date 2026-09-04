@@ -8,6 +8,11 @@
   <span class="stat" id="status"></span>
   <span class="sp"></span>
   <button class="tbtn" id="tr">&#128337; <span id="trlbl">全部 → now</span></button>
+  <label class="stat">Group By
+    <select class="tbtn" id="gb">
+      <option value="agg">聚合 (全部实例)</option>
+      <option value="rank">实例 / dp rank</option>
+    </select></label>
   <button class="tbtn" id="zout" title="zoom out 2x">&#8722;</button>
   <button class="tbtn" id="zrst" title="reset to whole run">&#8634;</button>
   <button class="tbtn" id="zact" title="trim the idle tail">有负载区间</button>
@@ -31,14 +36,14 @@
 <div class="sec"><div class="sech" data-t="s1"><span class="chev">&#9660;</span>
   <b>KV Cache</b><span class="stat">(3 panels)</span></div>
   <div class="grid" id="s1">
-    <div class="panel"><div class="ptit">Cached Tokens | by: medium</div>
+    <div class="panel"><div class="ptit" data-agg="Cached Tokens | by: medium" data-rank="Cached Tokens | by: instance">Cached Tokens | by: medium</div>
       <div class="pbody"><canvas id="c_tok" height="170"></canvas>
         <div class="lg" id="l_tok"></div></div></div>
-    <div class="panel"><div class="ptit">Cached Blocks | by: medium</div>
+    <div class="panel"><div class="ptit" data-agg="Cached Blocks | by: medium" data-rank="Cached Blocks | by: instance">Cached Blocks | by: medium</div>
       <div class="pbody"><canvas id="c_blk" height="170"></canvas>
         <div class="lg" id="l_blk"></div></div></div>
     <div class="panel" style="grid-column:1/-1">
-      <div class="ptit">L1 Pool | by: state
+      <div class="ptit" data-agg="L1 Pool | by: state" data-rank="L1 Pool | used+idle by: dp rank">L1 Pool | by: state
         &nbsp;<span class="stat">engine gauges vs. reconstructed tree residency
         -- evictable = resident but not referenced by any running request</span>
       </div>
@@ -49,10 +54,10 @@
 <div class="sec"><div class="sech" data-t="s2"><span class="chev">&#9660;</span>
   <b>Radix Tree</b><span class="stat">(3 panels)</span></div>
   <div class="grid" id="s2">
-    <div class="panel"><div class="ptit">Tree Shape | by: metric</div>
+    <div class="panel"><div class="ptit" data-agg="Tree Shape | by: metric" data-rank="Tree Shape | leaves by: instance">Tree Shape | by: metric</div>
       <div class="pbody"><canvas id="c_shape" height="170"></canvas>
         <div class="lg" id="l_shape"></div></div></div>
-    <div class="panel"><div class="ptit">KV Event Rate | by: type (ev/s)</div>
+    <div class="panel"><div class="ptit" data-agg="KV Event Rate | by: type (ev/s)" data-rank="KV Event Rate | stored/s by: instance">KV Event Rate | by: type (ev/s)</div>
       <div class="pbody"><canvas id="c_evt" height="170"></canvas>
         <div class="lg" id="l_evt"></div></div></div>
     <div class="panel" style="grid-column:1/-1">

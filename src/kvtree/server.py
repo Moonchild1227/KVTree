@@ -40,6 +40,10 @@ def make_handler(root: Path, turns_path: str | None):
                     for k, v in (r.get("streams") or {}).items():
                         streams[k] = {
                             "tree": v.get("tree") or {},
+                            # per-instance tier split: the dashboard's
+                            # "Group By: instance" needs it, aggregate totals
+                            # alone hide which rank is hot
+                            "mediums": v.get("mediums") or {},
                             "stored": v.get("stored", 0),
                             "removed": v.get("removed", 0),
                             "batches": v.get("batches", 0),
@@ -129,7 +133,8 @@ def make_handler(root: Path, turns_path: str | None):
                         try:
                             r = json.loads(line)
                             out.append({"ts": r["ts"], "time": r["time"],
-                                        "total": r.get("total") or {}})
+                                        "total": r.get("total") or {},
+                                        "ranks": r.get("ranks") or {}})
                         except Exception:
                             pass
                 self._send(json.dumps(out).encode())
