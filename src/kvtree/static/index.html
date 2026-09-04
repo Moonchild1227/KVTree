@@ -13,6 +13,7 @@
       <option value="agg">聚合 (全部实例)</option>
       <option value="rank">实例 / dp rank</option>
     </select></label>
+  <label class="chip"><input type="checkbox" id="logy"> 对数刻度</label>
   <button class="tbtn" id="zout" title="zoom out 2x">&#8722;</button>
   <button class="tbtn" id="zrst" title="reset to whole run">&#8634;</button>
   <button class="tbtn" id="zact" title="trim the idle tail">有负载区间</button>
@@ -45,7 +46,7 @@
     <div class="panel" style="grid-column:1/-1">
       <div class="ptit" data-agg="L1 Pool | by: state" data-rank="L1 Pool | used+idle by: dp rank">L1 Pool | by: state
         &nbsp;<span class="stat">engine gauges vs. reconstructed tree residency
-        -- evictable = resident but not referenced by any running request</span>
+        -- evictable = resident but not referenced by any running request. used 与 idle 常差两三个数量级，看不清就开右上角的对数刻度；free 默认隐藏，点图例可显示</span>
       </div>
       <div class="pbody"><canvas id="c_pool" height="170"></canvas>
         <div class="lg" id="l_pool"></div></div></div>

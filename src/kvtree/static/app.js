@@ -8,6 +8,7 @@ const MEDS=['GPU','CPU_PINNED','EXTERNAL','UNKNOWN'];
 const PAL=['#5794f2','#73bf69','#ff9830','#b877d9','#f2cc0c','#e02f44',
            '#8ab8ff','#c0d8a0'];
 let groupBy='agg';                  // 'agg' | 'rank'
+let logY=false;                     // pool states span 3 orders of magnitude
 function streamNames(){
   const n=new Set();
   for(const s of snaps)for(const k in (s.streams||{}))n.add(k);
@@ -19,7 +20,7 @@ function rankNames(){
   return[...n].sort();
 }
 function shortName(s){const m=String(s).match(/:(\d+)$/);return m?('port '+m[1]):s;}
-const PADL=54,PADR=10,PADT=8,PADB=17;   // identical on every time panel
+const PADL=58,PADR=12,PADT=16,PADB=17;   // identical on every time panel
 const $=id=>document.getElementById(id);
 let snaps=[],trees=[],turns=null,curTree=null,mets=[];
 // Grafana semantics: from/to hold EXPRESSIONS, resolved on every draw.
@@ -28,7 +29,7 @@ let snaps=[],trees=[],turns=null,curTree=null,mets=[];
 //   'now-15m' -> relative to wall clock
 //   <number>  -> frozen epoch seconds
 let range={from:null,to:'now'};
-let hidden={};                      // "panelId|series" -> true
+let hidden={'c_pool|free':true};    // "panelId|series" -> true
 let hover=null;                     // {ts, src, cx, cy, py}
 let sel=null;                       // drag-zoom selection {src,t0,t1}
 let follow=true,rfTimer=null,view={x:20,y:14,k:1,touched:false};
@@ -68,6 +69,7 @@ function dataRange(){
   let lo=Infinity,hi=-Infinity;
   for(const s of snaps){if(s.ts<lo)lo=s.ts;if(s.ts>hi)hi=s.ts;}
   if(turns)for(const t of turns){if(t.sent<lo)lo=t.sent;if(t.recv>hi)hi=t.recv;}
+  for(const m of mets){if(m.ts<lo)lo=m.ts;if(m.ts>hi)hi=m.ts;}
   if(!isFinite(lo)){lo=Date.now()/1000-60;hi=lo+60;}
   if(hi-lo<1e-6)hi=lo+1;
   return[lo,hi];
@@ -230,7 +232,7 @@ function seriesPool(){
 
 /* ---------------- generic time-series panel ---------------- */
 const TS=[{c:'c_tok',l:'l_tok',mode:'area',f:seriesTok,unit:' tok'},
-          {c:'c_pool',l:'l_pool',mode:'line',f:seriesPool,unit:' tok'},
+          {c:'c_pool',l:'l_pool',mode:'line',f:seriesPool,unit:' tok',log:true},
           {c:'c_blk',l:'l_blk',mode:'area',f:seriesBlk,unit:' blk'},
           {c:'c_shape',l:'l_shape',mode:'line',f:seriesShape,unit:''},
           {c:'c_evt',l:'l_evt',mode:'line',f:seriesEvt,unit:''},
@@ -238,19 +240,23 @@ const TS=[{c:'c_tok',l:'l_tok',mode:'area',f:seriesTok,unit:' tok'},
 
 function vis(p,s){return !hidden[p.c+'|'+s.name];}
 
-function axes(x,c,m,max){
+function axes(x,c,m,max,useLog){
   x.strokeStyle='#23252b';x.lineWidth=1;x.fillStyle='#7b8087';x.font='10px Inter';
+  const H=c.height-PADT-PADB;
   for(let i=0;i<=4;i++){
-    const y=PADT+(c.height-PADT-PADB)*i/4,v=max*(1-i/4);
+    const y=PADT+H*i/4;
+    const v=useLog?Math.pow(10,Math.log10(max+1)*(1-i/4))-1:max*(1-i/4);
     x.beginPath();x.moveTo(PADL,y);x.lineTo(c.width-PADR,y);x.stroke();
-    x.textAlign='right';x.fillText(fmtTok(v),PADL-5,y+3);}
+    x.textAlign='right';
+    x.fillText(fmtTok(v),PADL-6,y+(i===0?8:(i===4?-2:3)));}
   const nt=Math.max(2,Math.floor(m.W/95));
-  x.textAlign='center';
   for(let i=0;i<=nt;i++){
-    const t=m.t0+m.span*i/nt,px=m.X(t);
+    const t2=m.t0+m.span*i/nt,px=m.X(t2);
     x.beginPath();x.moveTo(px,PADT);x.lineTo(px,c.height-PADB);
     x.strokeStyle='#1b1d22';x.stroke();
-    x.fillText(fmtTime(t,m.span),px,c.height-4);}
+    x.textAlign=i===0?'left':(i===nt?'right':'center');
+    x.fillText(fmtTime(t2,m.span),px,c.height-4);}
+  x.textAlign='center';
 }
 function drawCursors(x,c,m){
   if(sel&&sel.t1!==sel.t0){
@@ -292,6 +298,7 @@ function drawTS(p){
   // stacking is right for aggregate tiers, wrong once every series is a
   // separate instance -- overlaid lines keep both dimensions readable
   const mode=(groupBy==='rank'&&p.mode==='area')?'line':p.mode;
+  const useLog=logY||!!p.log;
   const all=p.f(),ss=all.filter(s=>vis(p,s));
   legend(p,all);
   const m=xMapper(c);
@@ -307,8 +314,15 @@ function drawTS(p){
       max=Math.max(max,sum);}
   }else for(const s of ss)for(const v of s.vals)if(inR(v))max=Math.max(max,v[1]);
   max*=1.08;
-  const H=c.height-PADT-PADB,Y=v=>PADT+H-v/max*H;
-  axes(x,c,m,max);
+  const H=c.height-PADT-PADB;
+  axes(x,c,m,max,useLog);
+  x.save();                       // clip: series must never bleed into the axes
+  x.beginPath();
+  x.rect(PADL,PADT,c.width-PADL-PADR,H);
+  x.clip();
+  const Y=useLog
+    ? v=>PADT+H-Math.log10(Math.max(0,v)+1)/Math.log10(max+1)*H
+    : v=>PADT+H-v/max*H;
   if(mode==='area'){
     const n=ss.length?ss[0].vals.length:0,base=new Array(n).fill(0);
     for(const s of ss){
@@ -326,6 +340,7 @@ function drawTS(p){
     for(const v of s.vals){const px=m.X(v[0]),py=Y(v[1]);
       started?x.lineTo(px,py):(x.moveTo(px,py),started=true);}
     x.strokeStyle=s.color;x.lineWidth=1.4;x.stroke();}
+  x.restore();
   drawCursors(x,c,m);
   if(hover&&hover.src===p.c){
     const tip=$('tip');let s='';
@@ -359,10 +374,12 @@ function drawSessions(){
     $('sessstats').textContent='';return;}
   const m=xMapper(c),lanes=sessLanes(),ids=[...lanes.keys()];
   x.strokeStyle='#1b1d22';x.fillStyle='#7b8087';x.font='10px Inter';
-  const nt=Math.max(2,Math.floor(m.W/95));x.textAlign='center';
+  const nt=Math.max(2,Math.floor(m.W/95));
   for(let i=0;i<=nt;i++){const t=m.t0+m.span*i/nt,px=m.X(t);
     x.beginPath();x.moveTo(px,PADT);x.lineTo(px,c.height-PADB);x.stroke();
+    x.textAlign=i===0?'left':(i===nt?'right':'center');
     x.fillText(fmtTime(t,m.span),px,c.height-4);}
+  x.textAlign='center';
   const laneH=Math.min(15,(c.height-PADT-PADB)/Math.max(1,ids.length));
   const barH=Math.max(3,laneH*0.6);
   window._sessLane={laneH,ids,lanes};
@@ -550,6 +567,7 @@ window.addEventListener('mouseup',()=>{
     drawAll();}
   drag=null;});
 
+$('logy').onchange=e=>{logY=e.target.checked;drawAll();};
 $('gb').onchange=e=>{groupBy=e.target.value;
   document.querySelectorAll('[data-agg]').forEach(el=>{
     el.textContent=groupBy==='rank'?el.dataset.rank:el.dataset.agg;});
