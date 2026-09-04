@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>kvtree — KV Radix Tree Dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+</head><body>
+<div id="bar">
+  <h1>KV Radix Tree Dashboard</h1>
+  <span class="stat" id="status"></span>
+  <span class="sp"></span>
+  <button class="tbtn" id="tr">&#128337; <span id="trlbl">全部 → now</span></button>
+  <button class="tbtn" id="zout" title="zoom out 2x">&#8722;</button>
+  <button class="tbtn" id="zrst" title="reset to whole run">&#8634;</button>
+  <button class="tbtn" id="zact" title="trim the idle tail">有负载区间</button>
+  <select class="tbtn" id="rf">
+    <option value="0">Off</option><option value="5" selected>5s</option>
+    <option value="10">10s</option><option value="30">30s</option>
+  </select>
+  <button class="tbtn" id="now">Refresh</button>
+</div>
+<div id="pick">
+  <div>
+    <div style="font-size:12px;color:#ccccdc">绝对时间范围</div>
+    <label>开始</label><input id="pf" placeholder="now-2d / HH:MM:SS / epoch，空=数据起点">
+    <label>结束</label><input id="pt" placeholder="now / HH:MM:SS / epoch，空=数据末尾">
+    <button class="tbtn" id="papply" style="margin-top:10px">应用时间范围</button>
+    <div class="stat" style="margin-top:10px">数据范围 <span id="drange"></span></div>
+  </div>
+  <div class="qr" id="qr"></div>
+</div>
+
+<div class="sec"><div class="sech" data-t="s1"><span class="chev">&#9660;</span>
+  <b>KV Cache</b><span class="stat">(3 panels)</span></div>
+  <div class="grid" id="s1">
+    <div class="panel"><div class="ptit">Cached Tokens | by: medium</div>
+      <div class="pbody"><canvas id="c_tok" height="170"></canvas>
+        <div class="lg" id="l_tok"></div></div></div>
+    <div class="panel"><div class="ptit">Cached Blocks | by: medium</div>
+      <div class="pbody"><canvas id="c_blk" height="170"></canvas>
+        <div class="lg" id="l_blk"></div></div></div>
+    <div class="panel" style="grid-column:1/-1">
+      <div class="ptit">L1 Pool | by: state
+        &nbsp;<span class="stat">engine gauges vs. reconstructed tree residency
+        -- evictable = resident but not referenced by any running request</span>
+      </div>
+      <div class="pbody"><canvas id="c_pool" height="170"></canvas>
+        <div class="lg" id="l_pool"></div></div></div>
+  </div></div>
+
+<div class="sec"><div class="sech" data-t="s2"><span class="chev">&#9660;</span>
+  <b>Radix Tree</b><span class="stat">(3 panels)</span></div>
+  <div class="grid" id="s2">
+    <div class="panel"><div class="ptit">Tree Shape | by: metric</div>
+      <div class="pbody"><canvas id="c_shape" height="170"></canvas>
+        <div class="lg" id="l_shape"></div></div></div>
+    <div class="panel"><div class="ptit">KV Event Rate | by: type (ev/s)</div>
+      <div class="pbody"><canvas id="c_evt" height="170"></canvas>
+        <div class="lg" id="l_evt"></div></div></div>
+    <div class="panel" style="grid-column:1/-1">
+      <div class="ptit">Radix Tree Shape @ cursor</div>
+      <div class="row">
+        <span class="chip"><span class="sw" style="width:9px;height:9px;
+          border-radius:50%;background:#73bf69"></span>L1 GPU</span>
+        <span class="chip"><span class="sw" style="width:9px;height:9px;
+          border-radius:50%;background:#ff9830"></span>L2 CPU</span>
+        <span class="chip"><span class="sw" style="width:9px;height:9px;
+          border-radius:50%;background:#5794f2"></span>L3 EXT</span>
+        <span class="chip"><span class="sw" style="width:9px;height:9px;
+          border-radius:50%;background:#8ab8ff"></span>MIXED</span>
+        stream <select class="tbtn" id="stream"></select>
+        <label class="chip"><input type="checkbox" id="collapse" checked>
+          压缩长链</label>
+        <label class="chip"><input type="checkbox" id="follow" checked>
+          follow live</label>
+        <input type="range" id="scrub" min="0" max="0" value="0" step="1"
+               style="flex:1;min-width:200px">
+        <span class="stat" id="tslabel"></span>
+        <span class="stat" id="treestats"></span>
+        <button class="tbtn" id="fit">适应窗口</button>
+      </div>
+      <div id="treewrap"><svg id="svg"><g id="world"></g></svg></div>
+    </div>
+  </div></div>
+
+<div class="sec" id="sesssec">
+  <div class="sech" data-t="s3"><span class="chev">&#9660;</span>
+  <b>Sessions</b><span class="stat">(2 panels)</span></div>
+  <div class="grid one" id="s3">
+    <div class="panel"><div class="ptit">Session Timeline | by: session
+      &nbsp;<span class="stat" id="sessstats"></span></div>
+      <div class="row">
+        <span class="chip">前缀命中率
+          <span style="display:inline-block;width:80px;height:8px;border-radius:4px;
+            background:linear-gradient(90deg,#e02f44,#e0b400,#73bf69)"></span>
+          0→100%</span>
+        <span class="chip"><span style="display:inline-block;width:13px;height:8px;
+          background:#e02f44"></span>失败</span>
+        <span class="chip"><span style="display:inline-block;width:20px;height:2px;
+          background:#3a4350"></span>同 session 连线(间隙=等 tool)</span>
+      </div>
+      <div class="pbody"><canvas id="c_sess" height="260"></canvas>
+        <div class="lg" id="l_sess"></div></div></div>
+    <div class="panel"><div class="ptit">Concurrency | by: state</div>
+      <div class="pbody"><canvas id="c_conc" height="150"></canvas>
+        <div class="lg" id="l_conc"></div></div></div>
+  </div></div>
+<div id="tip"></div>
+<script src="/static/app.js"></script>
+</body></html>
