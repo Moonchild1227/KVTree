@@ -34,6 +34,7 @@ let hover=null;                     // {ts, src, cx, cy, py}
 let sel=null;                       // drag-zoom selection {src,t0,t1}
 let follow=true,rfTimer=null,view={x:20,y:14,k:1,touched:false};
 let treeReq=0;                      // discard stale tree loads while scrubbing
+let fitAll=true;                    // start with the whole tree in the viewport
 
 const TSP=[{l:'全部 → now (一直累积)',s:-1},
   {l:'Last 5 minutes',s:300},{l:'Last 15 minutes',s:900},
@@ -502,7 +503,7 @@ function drawTree(){
     `${st.blocks} blocks / roots ${st.roots.length} / leaves ${leaf} / `+
     `depth ${maxD+1} / row ${ysFit.toFixed(0)}px`;
   if(!view.touched){
-    const k=window._fitAll
+    const k=fitAll
       ? Math.min(1,(boxW-30)/Math.max(1,natW),(boxH-30)/natH)
       : Math.min(1,(boxW-30)/Math.max(1,natW));
     view={x:20,y:14,k:Math.max(0.03,k),touched:false};
@@ -645,17 +646,19 @@ function applyView(){$('world').setAttribute('transform',
 let drag=null;
 const svgEl=$('svg');
 svgEl.addEventListener('wheel',e=>{
+  if(document.activeElement!==svgEl)return;
   e.preventDefault();
   const r=svgEl.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
   const k2=Math.min(8,Math.max(0.1,view.k*(e.deltaY<0?1.15:1/1.15)));
   view.x=mx-(mx-view.x)*k2/view.k;view.y=my-(my-view.y)*k2/view.k;
-  view.k=k2;view.touched=true;applyView();},{passive:false});
+  view.k=k2;view.touched=true;fitAll=false;applyView();},{passive:false});
 svgEl.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY};
-  view.touched=true;});
-svgEl.addEventListener('dblclick',()=>{view={x:20,y:14,k:1,touched:true};applyView();});
+  svgEl.focus({preventScroll:true});});
+svgEl.addEventListener('dblclick',()=>{
+  fitAll=true;view.touched=false;drawTree();});
 window.addEventListener('mousemove',e=>{
   if(drag){view.x+=e.clientX-drag.x;view.y+=e.clientY-drag.y;
-    drag={x:e.clientX,y:e.clientY};applyView();}
+    drag={x:e.clientX,y:e.clientY};view.touched=true;fitAll=false;applyView();}
   const t=$('tip');
   if(e.target.dataset&&e.target.dataset.t&&e.target.closest('svg')){
     t.style.display='block';t.textContent=e.target.dataset.t;
@@ -669,8 +672,7 @@ $('scrub').oninput=async()=>{
   drawAll();                    // move the shared cursor before the fetch
   await loadSelectedTree();};
 $('follow').onchange=e=>{follow=e.target.checked;if(follow)refresh();};
-$('fit').onclick=()=>{window._fitAll=!window._fitAll;
-  view.touched=false;drawTree();};
+$('fit').onclick=()=>{fitAll=true;view.touched=false;drawTree();};
 $('collapse').onchange=drawTree;
 $('stream').onchange=drawTree;
 window.onresize=()=>{drawAll();drawTree();};

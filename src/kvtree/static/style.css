@@ -46,6 +46,7 @@ h1{font-size:14px;font-weight:600;margin:0 8px 0 0}
 .chip{display:inline-flex;align-items:center;gap:5px;background:#1f2228;
       border:1px solid #2c3235;border-radius:11px;padding:2px 9px;font-size:11px}
 svg{display:block;cursor:grab;background:#0b0c0e;border-radius:2px}
+svg:focus{outline:1px solid #5794f2;outline-offset:-1px}
 #treewrap{max-height:520px;overflow:auto;background:#0b0c0e;border-radius:2px}
 svg:active{cursor:grabbing}
 .lnk{fill:none;stroke:#3a4350;stroke-width:1.2}
