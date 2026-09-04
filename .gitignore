@@ -4,8 +4,9 @@ __pycache__/
 build/
 dist/
 .venv/
-# recorded data
+# recorded data (but keep the test fixture: the suite needs it)
 *.jsonl
+!tests/fixtures/*.jsonl
 data/
 out_*/
 live/
