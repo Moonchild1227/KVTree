@@ -12,10 +12,11 @@ body{font:13px Inter,-apple-system,"Segoe UI",sans-serif;background:#111217;
 select.tbtn{padding:4px 6px}
 h1{font-size:14px;font-weight:600;margin:0 8px 0 0}
 .stat{color:#7b8087;font-size:12px}
-#pick{display:none;position:absolute;top:40px;right:14px;z-index:60;
+#pick{display:none;position:fixed;top:42px;right:14px;z-index:60;
       background:#181b1f;border:1px solid #2c3235;border-radius:3px;
-      padding:12px;width:520px;display:none;grid-template-columns:1fr 1fr;
-      gap:14px;box-shadow:0 4px 16px #0008}
+      padding:12px;width:520px;max-width:calc(100vw - 28px);
+      max-height:calc(100vh - 56px);overflow:auto;display:none;
+      grid-template-columns:1fr 1fr;gap:14px;box-shadow:0 4px 16px #0008}
 #pick.open{display:grid}
 #pick label{display:block;color:#7b8087;font-size:11px;margin:8px 0 3px}
 #pick input{width:100%;background:#0b0c0e;border:1px solid #2c3235;
