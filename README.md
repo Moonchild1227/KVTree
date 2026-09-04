@@ -70,8 +70,9 @@ kvtree reprocess  --raw --out --snapshot-interval --tree-dump-interval
 
 ## 看板
 
-- **KV Cache** — 分层驻留的 token 数与 block 数（L1 GPU / L2 CPU_PINNED /
-  L3 EXTERNAL）。`write_through` 下一个 block 会同时驻留多层，归属取最快的那层。
+- **KV Cache** — 当前仍驻留的 KV token 数与 block 数（L1 GPU / L2 CPU_PINNED /
+  L3 EXTERNAL），包含 used 和 idle，不是累计写入量。`write_through` 下一个 block
+  会同时驻留多层，归属取最快的那层。
 - **L1 Pool** — 引擎的 `num_used_tokens`（被运行中请求引用）、
   `kv_evictable_tokens`（驻留但未被引用）、`kv_available_tokens`，跟事件流重建
   出的驻留量画在一起互相校验。三者常差两三个数量级，用工具栏的**对数刻度**看；
