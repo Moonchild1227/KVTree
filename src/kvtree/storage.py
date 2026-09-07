@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import time
+import urllib.parse
 from pathlib import Path
 
 
@@ -17,7 +18,7 @@ def atomic_json(path: Path, value) -> None:
 
 
 def stream_slug(stream: str) -> str:
-    return stream.replace(":", "_").replace("/", "_")
+    return urllib.parse.quote(stream, safe="")
 
 
 class RunWriter:
@@ -25,15 +26,18 @@ class RunWriter:
 
     def __init__(self, root: Path, metadata: dict | None = None):
         self.root = root
+        if (root / "manifest.json").exists():
+            raise FileExistsError(f"run already exists: {root}")
         self.root.mkdir(parents=True, exist_ok=True)
         self.started = time.time()
         self.count = 0
         self.streams: dict[str, dict] = {}
         self.files: dict[Path, object] = {}
         self.metadata = metadata or {}
+        self.last_manifest = 0.0
         self._write_manifest("running")
 
-    def append(self, record: dict) -> None:
+    def append(self, record: dict, encoded: str | None = None) -> None:
         ts = float(record["recv_ts"])
         stream = record["stream"]
         hour = time.strftime("%Y-%m-%dT%H", time.gmtime(ts))
@@ -42,7 +46,7 @@ class RunWriter:
         if fp is None:
             path.parent.mkdir(parents=True, exist_ok=True)
             fp = self.files[path] = path.open("a", buffering=1)
-        fp.write(json.dumps(record) + "\n")
+        fp.write(encoded if encoded is not None else json.dumps(record) + "\n")
         stat = self.streams.setdefault(stream, {"batches": 0, "first_ts": ts,
                                                  "last_ts": ts, "shards": []})
         stat["batches"] += 1
@@ -51,7 +55,7 @@ class RunWriter:
         if rel not in stat["shards"]:
             stat["shards"].append(rel)
         self.count += 1
-        if self.count % 100 == 0:
+        if time.time() - self.last_manifest >= 5:
             self._write_manifest("running")
 
     def _write_manifest(self, status: str) -> None:
@@ -59,8 +63,9 @@ class RunWriter:
             "format": "kvtree-run", "version": 1, "status": status,
             "started_at": self.started, "updated_at": time.time(),
             "batches": self.count, "streams": self.streams,
-            **self.metadata,
+            "metadata": self.metadata,
         })
+        self.last_manifest = time.time()
 
     def close(self) -> None:
         for fp in self.files.values():
@@ -82,9 +87,14 @@ def event_files(source: Path) -> list[Path]:
 def import_run(raw: Path, out: Path, turns: Path | None = None) -> dict:
     if (out / "manifest.json").exists():
         raise FileExistsError(f"run already exists: {out}")
+    if not raw.exists():
+        raise FileNotFoundError(f"input does not exist: {raw}")
+    paths = event_files(raw)
+    if not paths:
+        raise FileNotFoundError(f"no event files found under: {raw}")
     writer = RunWriter(out, {"imported_from": str(raw)})
     bad = 0
-    for path in event_files(raw):
+    for path in paths:
         for line in path.open():
             try:
                 writer.append(json.loads(line))

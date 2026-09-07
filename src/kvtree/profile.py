@@ -30,6 +30,12 @@ def build(source: Path, out: Path, snapshot_interval: float = 5.0,
           tree_interval: float = 15.0) -> dict:
     if snapshot_interval <= 0 or tree_interval <= 0:
         raise ValueError("profile intervals must be greater than zero")
+    if not source.exists():
+        raise FileNotFoundError(f"input does not exist: {source}")
+    if out.resolve() == source.resolve():
+        raise ValueError("profile output must differ from input run")
+    if (out / "profile.json").exists():
+        raise FileExistsError(f"profile output already exists: {out}")
     out.mkdir(parents=True, exist_ok=True)
     trees = out / "trees"
     trees.mkdir(exist_ok=True)
@@ -47,7 +53,9 @@ def build(source: Path, out: Path, snapshot_interval: float = 5.0,
                 bad["bad_lines"] += 1
                 continue
             last_now = now
-            st = streams.setdefault(name, collect.StreamState(name))
+            st = streams.get(name)
+            if st is None:
+                st = streams[name] = collect.StreamState(name)
             st.batches += 1
             if rec.get("seq") is not None:
                 st.check_seq(int(rec["seq"]))

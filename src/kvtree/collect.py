@@ -384,8 +384,9 @@ class Monitor:
                    "batch_ts": batch.ts,
                    "attn_dp_rank": batch.attn_dp_rank,
                    "events": [self._event_to_json(e) for e in batch.events]}
-            self.raw_fp.write(json.dumps(rec) + "\n")
-            self.run_writer.append(rec)
+            encoded = json.dumps(rec) + "\n"
+            self.raw_fp.write(encoded)
+            self.run_writer.append(rec, encoded)
             for e in batch.events:
                 st.apply(e, now, self.kve)
 
