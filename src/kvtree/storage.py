@@ -21,17 +21,38 @@ def stream_slug(stream: str) -> str:
     return urllib.parse.quote(stream, safe="")
 
 
-class RunWriter:
-    """Append batches to hourly, per-stream shards and maintain a manifest."""
+def read_manifest(root: Path) -> dict:
+    """Manifest of an existing run, or {} if absent/unreadable."""
+    path = root / "manifest.json"
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        raise ValueError(f"manifest is unreadable: {path}")
+    return value if isinstance(value, dict) else {}
 
-    def __init__(self, root: Path, metadata: dict | None = None):
+
+class RunWriter:
+    """Append batches to hourly, per-stream shards and maintain a manifest.
+
+    ``append=False`` refuses to touch an existing run: re-importing the same log
+    into one directory would silently double every record. Live capture passes
+    ``append=True`` -- monitor has always opened its outputs in append mode so
+    that a restarted capture keeps writing into the same run, and the prior
+    manifest counters are carried over so they stay consistent with the shards.
+    """
+
+    def __init__(self, root: Path, metadata: dict | None = None,
+                 append: bool = False):
         self.root = root
-        if (root / "manifest.json").exists():
+        prior = read_manifest(root)
+        if prior and not append:
             raise FileExistsError(f"run already exists: {root}")
         self.root.mkdir(parents=True, exist_ok=True)
-        self.started = time.time()
-        self.count = 0
-        self.streams: dict[str, dict] = {}
+        self.started = prior.get("started_at") or time.time()
+        self.count = prior.get("batches") or 0
+        self.streams: dict[str, dict] = prior.get("streams") or {}
         self.files: dict[Path, object] = {}
         self.metadata = metadata or {}
         self.last_manifest = 0.0
@@ -75,6 +96,12 @@ class RunWriter:
 
 
 def event_files(source: Path) -> list[Path]:
+    """Event logs backing a run, newest layout first.
+
+    Each returned file is ordered by ``recv_ts`` for anything monitor or
+    RunWriter produced (recv_ts is stamped at receive time and appended in
+    order); `profile.records` merges them on that assumption.
+    """
     if source.is_file():
         return [source]
     shards = sorted((source / "events").glob("stream=*/*.jsonl"))
@@ -85,27 +112,31 @@ def event_files(source: Path) -> list[Path]:
 
 
 def import_run(raw: Path, out: Path, turns: Path | None = None) -> dict:
-    if (out / "manifest.json").exists():
+    if read_manifest(out):
         raise FileExistsError(f"run already exists: {out}")
     if not raw.exists():
         raise FileNotFoundError(f"input does not exist: {raw}")
     paths = event_files(raw)
     if not paths:
         raise FileNotFoundError(f"no event files found under: {raw}")
+    if turns and not turns.exists():
+        raise FileNotFoundError(f"turns file does not exist: {turns}")
     writer = RunWriter(out, {"imported_from": str(raw)})
     bad = 0
-    for path in paths:
-        for line in path.open():
-            try:
-                writer.append(json.loads(line))
-            except (ValueError, KeyError, TypeError):
-                bad += 1
-    writer.close()
+    try:
+        for path in paths:
+            for line in path.open():
+                try:
+                    writer.append(json.loads(line))
+                except (ValueError, KeyError, TypeError):
+                    bad += 1
+    finally:
+        writer.close()
     if turns:
         dest = out / "turns" / "turns.jsonl"
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(turns, dest)
-    manifest = json.loads((out / "manifest.json").read_text())
+    manifest = read_manifest(out)
     manifest["bad_lines"] = bad
     atomic_json(out / "manifest.json", manifest)
     return manifest

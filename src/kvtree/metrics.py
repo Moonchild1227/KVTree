@@ -30,12 +30,25 @@ WANTED = (
 )
 LINE = re.compile(r"^sglang:(\w+)\{([^}]*)\}\s+([0-9.eE+-]+)$")
 
-_stop = False
+class _StopFlag:
+    def __init__(self):
+        self.stop = False
+
+    def __call__(self):
+        return self.stop
+
+    def set(self, *_):
+        self.stop = True
 
 
-def _sig(*_):
-    global _stop
-    _stop = True
+def _signal_stop() -> _StopFlag:
+    flag = _StopFlag()
+    try:
+        signal.signal(signal.SIGINT, flag.set)
+        signal.signal(signal.SIGTERM, flag.set)
+    except ValueError:
+        pass  # not in the main thread; observe passes its own stop callable
+    return flag
 
 
 def labels(raw: str) -> dict:
@@ -66,16 +79,20 @@ def scrape(url: str) -> dict:
 
 
 def run(url: str, out: Path, interval: float = 5.0,
-        duration: float = 0.0) -> int:
-    """Poll the engine's /metrics and append one JSON object per sample."""
-    signal.signal(signal.SIGINT, _sig)
-    signal.signal(signal.SIGTERM, _sig)
+        duration: float = 0.0, stop=None) -> int:
+    """Poll the engine's /metrics and append one JSON object per sample.
+
+    `stop` is a zero-arg callable; callers running this loop outside the main
+    thread (observe) pass one, the CLI path installs signal handlers itself.
+    """
+    if stop is None:
+        stop = _signal_stop()
     out.mkdir(parents=True, exist_ok=True)
     fp = (out / "metrics.jsonl").open("a", buffering=1)
     t0, n = time.time(), 0
     print(f"[metrics] {url} every {interval}s -> {out/'metrics.jsonl'}",
           flush=True)
-    while not _stop:
+    while not stop():
         now = time.time()
         try:
             per_rank = scrape(url)

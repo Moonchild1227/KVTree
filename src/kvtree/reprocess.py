@@ -1,22 +1,21 @@
-"""Rebuild snapshots/tree dumps from a captured raw_events.jsonl.
+"""Event -> tree-state derivation shared by live collection and offline replay.
 
-raw_events.jsonl keeps every decoded event, so a change in how the tree state
-is derived does not require re-running the engine -- the run is replayable.
-Used when the tier-residency rule changed (a block written through GPU->CPU
-must count as GPU, not CPU).
+`to_event` rebuilds a kv-events struct from a recorded JSON line and `snapshot`
+turns the per-stream states into one time point; `profile.build` drives both.
+The `reprocess` CLI is the thin legacy front end: a recorded run keeps every
+decoded event, so changing how tree state is derived does not require re-running
+the engine. Used when the tier-residency rule changed (a block written through
+GPU->CPU must count as GPU, not CPU).
 
-  ./reprocess.py --raw <run>/kvmon/raw_events.jsonl --out <run>/kvmon_v2 \
+  kvtree reprocess --raw <run>/kvmon/raw_events.jsonl --out <run>/kvmon_v2 \
       [--snapshot-interval 5] [--tree-dump-interval 15]
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from pathlib import Path
-
-from . import collect as m
 
 
 def to_event(e: dict, kve):
@@ -67,52 +66,13 @@ def main(argv=None) -> int:
                     dest="tree_int")
     a = ap.parse_args(argv)
 
-    kve = m.load_kv_events_module()
-    out = Path(a.out)
-    (out / "trees").mkdir(parents=True, exist_ok=True)
-    snap_fp = (out / "snapshots.jsonl").open("w")
-
-    streams: dict[str, object] = {}
-    next_snap = next_tree = None
-    n_ev = 0
-    for line in Path(a.raw).open():
-        try:
-            r = json.loads(line)
-        except Exception:
-            continue
-        now = r["recv_ts"]
-        st = streams.get(r["stream"])
-        if st is None:
-            st = streams[r["stream"]] = m.StreamState(r["stream"])
-        st.batches += 1
-        if r.get("seq") is not None:
-            st.check_seq(int(r["seq"]))
-        for e in r.get("events") or []:
-            st.apply(to_event(e, kve), now, kve)
-            n_ev += 1
-        if next_snap is None:
-            next_snap, next_tree = now, now
-        while now >= next_snap:
-            snap_fp.write(json.dumps(snapshot(streams, next_snap)) + "\n")
-            next_snap += a.snap_int
-        while now >= next_tree:
-            payload = {"ts": next_tree,
-                       "streams": {n: s.tree_dump() for n, s in streams.items()}}
-            (out / "trees" / f"tree_{int(next_tree)}.json").write_text(
-                json.dumps(payload))
-            next_tree += a.tree_int
-
-    last = snapshot(streams, next_snap or time.time())
-    snap_fp.write(json.dumps(last) + "\n")
-    snap_fp.close()
-    payload = {"ts": last["ts"],
-               "streams": {n: s.tree_dump() for n, s in streams.items()}}
-    (out / "live_tree.json").write_text(json.dumps(payload))
-    for n, s in streams.items():
-        (out / f"tree_{n.replace(':', '_')}_final.json").write_text(
-            json.dumps(s.tree_dump()))
-    tot = last["totals"]
-    print(f"[reprocess] {n_ev} events -> {out}")
+    # One replay implementation, shared with `kvtree profile` -- the two used to
+    # carry separate copies of the snapshot grid and drifted apart.
+    from .profile import build
+    result = build(Path(a.raw), Path(a.out), a.snap_int, a.tree_int,
+                   allow_existing=True)
+    print(f"[reprocess] {result['events']} events -> {a.out}")
+    tot = result["totals"]
     for med in sorted(tot):
         print(f"  {med:12s} blocks={tot[med]['blocks']:6d} "
               f"tokens={tot[med]['tokens']/1000:.0f}k")

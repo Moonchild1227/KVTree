@@ -306,10 +306,19 @@ class Monitor:
         self.trees_dir = self.out / "trees"
         if args.tree_dump_interval > 0:
             self.trees_dir.mkdir(exist_ok=True)
-        self.raw_fp = open(self.out / "raw_events.jsonl", "a", buffering=1)
+        # Both event sinks are append-mode on purpose: a restarted capture keeps
+        # writing into the same run directory.
+        #
+        # raw_events.jsonl and events/ hold the same lines. The flat file is the
+        # documented replay input (`reprocess --raw`) and predates the sharded
+        # layout; the shards are what `profile`/`serve` read for a long run.
+        # Both are written from one encode -- drop the flat file once nothing
+        # points at it any more.
         self.run_writer = RunWriter(self.out, {"hosts": args.hosts,
-                                                "base_port": args.base_port,
-                                                "dp_size": args.dp_size})
+                                               "base_port": args.base_port,
+                                               "dp_size": args.dp_size},
+                                    append=True)
+        self.raw_fp = open(self.out / "raw_events.jsonl", "a", buffering=1)
         self.snap_fp = open(self.out / "snapshots.jsonl", "a", buffering=1)
         self.streams: dict[str, StreamState] = {}
         self.ctx = zmq.Context.instance()
