@@ -80,6 +80,8 @@ def event_files(source: Path) -> list[Path]:
 
 
 def import_run(raw: Path, out: Path, turns: Path | None = None) -> dict:
+    if (out / "manifest.json").exists():
+        raise FileExistsError(f"run already exists: {out}")
     writer = RunWriter(out, {"imported_from": str(raw)})
     bad = 0
     for path in event_files(raw):

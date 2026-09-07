@@ -55,7 +55,7 @@ def _import(a) -> int:
 
 def _profile(a) -> int:
     from .profile import build
-    result = build(Path(a.run), Path(a.out or a.run), a.snapshot_interval,
+    result = build(Path(a.run), Path(a.out), a.snapshot_interval,
                    a.tree_dump_interval)
     print(f"[profile] {result['events']} events -> {result['profile_dir']}")
     return 0
@@ -118,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("profile", help="profile an imported or recorded run")
     p.add_argument("--run", required=True)
-    p.add_argument("--out", default=None)
+    p.add_argument("--out", required=True)
     p.add_argument("--snapshot-interval", type=float, default=5.0)
     p.add_argument("--tree-dump-interval", type=float, default=15.0)
     p.set_defaults(fn=_profile)
