@@ -76,9 +76,7 @@ def make_handler(root: Path, turns_path: str | None):
 
         def _turns(self):
             out = []
-            if not turns_path:
-                return out
-            p = Path(turns_path)
+            p = Path(turns_path) if turns_path else root / "turns" / "turns.jsonl"
             if not p.exists():
                 return out
             for line in p.read_text().splitlines():
@@ -144,6 +142,11 @@ def make_handler(root: Path, turns_path: str | None):
                 ts = parse_qs(u.query).get("ts", [""])[0]
                 p = root / "trees" / f"tree_{ts}.json"
                 if not p.exists():
+                    try:
+                        p = root / "trees" / f"tree_{int(float(ts) * 1000)}.json"
+                    except (TypeError, ValueError):
+                        pass
+                if not p.exists():
                     p = root / "live_tree.json"
                 self._send(p.read_bytes() if p.exists()
                            else b'{"ts":0,"streams":{}}')
@@ -154,10 +157,15 @@ def make_handler(root: Path, turns_path: str | None):
     return H
 
 
+def make_server(directory: Path, turns: str | None, port: int = 8899,
+                bind: str = "0.0.0.0") -> ThreadingHTTPServer:
+    srv = ThreadingHTTPServer((bind, port), make_handler(directory, turns))
+    used = Path(turns) if turns else directory / "turns" / "turns.jsonl"
+    print(f"kvtree dashboard: http://{bind}:{port}/  (data: {directory}"
+          + (f", turns: {used}" if used.exists() else "") + ")", flush=True)
+    return srv
+
+
 def serve(directory: Path, turns: str | None, port: int = 8899,
           bind: str = "0.0.0.0") -> None:
-    srv = ThreadingHTTPServer((bind, port), make_handler(directory, turns))
-    print(f"kvtree dashboard: http://{bind}:{port}/  (data: {directory}"
-          + (f", turns: {turns}" if turns else "") + ")", flush=True)
-    srv.serve_forever()
-
+    make_server(directory, turns, port, bind).serve_forever()

@@ -28,6 +28,25 @@ python -m sglang.launch_server ... \
 
 ## 用法
 
+`observe` 一条命令把三件事拉起（monitor + metrics + dashboard，一个 Ctrl-C 全停）。
+kvtree 不负责启动 SGLang——先起 observe（或 monitor），再起引擎和 workload，事件才不会漏：
+
+```bash
+kvtree observe \
+  --hosts 10.99.90.190,10.99.90.187,10.99.90.199,10.99.90.196 \
+  --base-port 37004 --dp-size 4 \
+  --metrics-url http://127.0.0.1:37000/metrics \
+  --out-dir ./data/kvmon \
+  --turns ./client/turns.jsonl \
+  --port 8899
+```
+
+session 文件不自动发现：压测客户端把它写在哪里，kvtree 就从哪里接。显式 `--turns`
+优先；也可以导出通用环境变量 `KVTREE_TURNS=/path/to/client/turns.jsonl`，
+之后 `observe` / `serve` 不传 `--turns` 也能找到。
+
+也可以分开跑各组件：
+
 ```bash
 # 采集：订阅 4 个 rank
 kvtree monitor --hosts 127.0.0.1 --base-port 37004 --dp-size 4 --out-dir ./data/kvmon
@@ -46,23 +65,53 @@ kvtree serve --dir ./data/kvmon --turns ./data/turns.jsonl --port 8899
 
 ### 离线重算
 
-`raw_events.jsonl` 保存了每条解码后的事件，改了推导规则不用重跑引擎：
+采集下来的事件是可重放的事实来源，改了推导规则不用重跑引擎：
 
 ```bash
 kvtree reprocess --raw ./data/kvmon/raw_events.jsonl --out ./data/kvmon_v2
 kvtree serve --dir ./data/kvmon_v2 --turns ./data/turns.jsonl
 ```
 
+长跑或者要归档的场景，先 `import` 成分片布局（按 stream + 小时切分，带
+`manifest.json`），再 `profile`：
+
+```bash
+# 把裸日志（或者一个已有 run 目录）整理成 run 布局，顺手把 turns 收进去
+kvtree import --raw ./data/kvmon/raw_events.jsonl --out ./runs/exp1 \
+              --turns ./data/turns.jsonl
+
+# 重算快照和树；--out 必须和 --run 不同，profile 不会就地覆盖录制结果
+kvtree profile --run ./runs/exp1 --out ./runs/exp1_v2 --snapshot-interval 5
+
+# turns 已经在 run 里，serve 不用再指
+kvtree serve --dir ./runs/exp1_v2
+```
+
+`import` 和 `profile` 都拒绝写入已存在的 run / profile 目录——重复导入会把每条记录
+写两遍，重复 profile 会覆盖已有结果。`reprocess` 是 `profile` 的旧前端，两者共用同一
+套重放实现，区别只是 `reprocess` 允许反复写同一个输出目录。
+
 ### 命令与参数
 
 ```
+kvtree observe    --hosts --base-port --dp-size --topic --out-dir
+                  --snapshot-interval --tree-dump-interval --schema --sub-hwm
+                  --metrics-url --metrics-interval --turns --port --bind
 kvtree monitor    --hosts --base-port --dp-size --topic --out-dir
                   --snapshot-interval --tree-dump-interval --duration
                   --sub-hwm --schema
 kvtree metrics    --url --out --interval --duration
 kvtree serve      --dir --turns --port --bind
 kvtree reprocess  --raw --out --snapshot-interval --tree-dump-interval
+kvtree import     --raw --out --turns
+kvtree profile    --run --out --snapshot-interval --tree-dump-interval
 ```
+
+`observe` / `serve` 的 `--turns` 缺省时读环境变量 `KVTREE_TURNS`，再缺省才回落到
+run 目录里的 `turns/turns.jsonl`。
+
+`--tree-dump-interval 0` 关闭周期性树快照（`monitor` 和 `profile` 都是这个语义）。
+`monitor` 可以反复写同一个 `--out-dir`，续采会接着写同一个 run。
 
 `--schema /path/to/kv_events.py` 严格使用指定的引擎 schema 解码；默认使用内置的
 宽松 schema，因为部分引擎发出的 `token_ids` 是 `(tok, next)` 成对结构，与其自身
@@ -95,13 +144,21 @@ kvtree reprocess  --raw --out --snapshot-interval --tree-dump-interval
 ```
 data/
   kvmon/
+    manifest.json         run 元信息：状态、批次数、每个 stream 的分片与时间范围
     raw_events.jsonl      每个事件批次一行，可重放的事实来源
+    events/               同样的内容，按 stream + 小时分片
+      stream=<url编码的stream>/<YYYY-MM-DDTHH>.jsonl
     snapshots.jsonl       周期快照：分层统计、树统计、序号连续性
     trees/tree_<ts>.json  周期性完整树快照
     live_tree.json        最新一份
+    turns/turns.jsonl     `import --turns` 收进来的那份（serve 会自动找到）
   metrics.jsonl           引擎 /metrics 采样
   turns.jsonl             压测客户端写的每轮记录
 ```
+
+`raw_events.jsonl` 和 `events/` 内容相同：前者是 `reprocess --raw` 的输入、也是分片
+布局之前的格式，后者是 `profile` 长跑时读的。两份由同一次编码写出，等到没有东西再指
+向扁平文件就可以删掉它。
 
 `turns.jsonl` 每行需要这些字段，任何压测器按格式追加写即可（参考
 `examples/replay_agentic.py`）：
@@ -118,7 +175,8 @@ data/
 - 只支持 SGLang。
 - 只能看到采集启动之后的事件，之前已缓存的 block 不在树里。要干净的树就在压测前
   重启引擎。
-- `raw_events.jsonl` 会持续增长，目前需要手动轮转。
+- 事件日志会持续增长，目前需要手动轮转；而且同一份内容落两处
+  （`raw_events.jsonl` 和 `events/`），磁盘按两倍算。
 
 ## 开发
 

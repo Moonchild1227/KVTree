@@ -35,6 +35,7 @@ let sel=null;                       // drag-zoom selection {src,t0,t1}
 let follow=true,rfTimer=null,view={x:20,y:14,k:1,touched:false};
 let treeReq=0;                      // discard stale tree loads while scrubbing
 let fitAll=true;                    // start with the whole tree in the viewport
+let activityInitialized=false;      // select the workload window once turns arrive
 
 const TSP=[{l:'全部 → now (一直累积)',s:-1},
   {l:'Last 5 minutes',s:300},{l:'Last 15 minutes',s:900},
@@ -554,6 +555,16 @@ async function refresh(){
   // turns.jsonl grows while a replay is running. Fetch it on every refresh;
   // stopping after the first non-empty response freezes the live swimlanes.
   try{turns=await j('/api/turns');}catch(e){turns=turns||[];}
+  // Historical runs often keep the monitor alive after the workload exits.
+  // The wall-clock "now" range then pushes the session lanes into a tiny
+  // sliver at the left. Pick the actual workload interval on first load;
+  // subsequent refreshes and explicit user ranges remain untouched.
+  if(!activityInitialized&&turns.length){
+    const [lo,hi]=activityRange();
+    range={from:lo,to:hi};
+    $('trlbl').textContent='有负载区间';
+    activityInitialized=true;
+  }
   if(turns.length)$('sesssec').style.display='block';
   const sc=$('scrub');
   syncScrubBounds();
