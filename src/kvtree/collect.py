@@ -40,6 +40,7 @@ from typing import Optional, Union
 
 import msgspec
 import zmq
+from .storage import RunWriter, atomic_json
 
 # Optional: decode with the engine's own kv_events.py instead of the mirror
 # below. Left empty by default -- the mirror is deliberately more permissive.
@@ -306,6 +307,9 @@ class Monitor:
         if args.tree_dump_interval > 0:
             self.trees_dir.mkdir(exist_ok=True)
         self.raw_fp = open(self.out / "raw_events.jsonl", "a", buffering=1)
+        self.run_writer = RunWriter(self.out, {"hosts": args.hosts,
+                                                "base_port": args.base_port,
+                                                "dp_size": args.dp_size})
         self.snap_fp = open(self.out / "snapshots.jsonl", "a", buffering=1)
         self.streams: dict[str, StreamState] = {}
         self.ctx = zmq.Context.instance()
@@ -381,6 +385,7 @@ class Monitor:
                    "attn_dp_rank": batch.attn_dp_rank,
                    "events": [self._event_to_json(e) for e in batch.events]}
             self.raw_fp.write(json.dumps(rec) + "\n")
+            self.run_writer.append(rec)
             for e in batch.events:
                 st.apply(e, now, self.kve)
 
@@ -440,10 +445,9 @@ class Monitor:
                    "streams": {n: st.tree_dump()
                                for n, st in self.streams.items()
                                if st.blocks}}
-        (self.out / "live_tree.json").write_text(json.dumps(payload))
+        atomic_json(self.out / "live_tree.json", payload)
         if self.args.tree_dump_interval > 0:
-            (self.trees_dir / f"tree_{int(now)}.json").write_text(
-                json.dumps(payload))
+            atomic_json(self.trees_dir / f"tree_{int(now)}.json", payload)
 
     # -- shutdown ---------------------------------------------------------------
     def finish(self):
@@ -452,7 +456,8 @@ class Monitor:
         for name, st in self.streams.items():
             if st.blocks:
                 p = self.out / f"tree_{name.replace(':', '_')}_final.json"
-                p.write_text(json.dumps(st.tree_dump()))
+                atomic_json(p, st.tree_dump())
         self.raw_fp.close()
         self.snap_fp.close()
+        self.run_writer.close()
         print(f"[monitor] done. outputs in {self.out}/", flush=True)
