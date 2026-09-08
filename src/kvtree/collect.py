@@ -7,7 +7,11 @@ rebuilds the per-stream KV radix tree (block_hash -> parent/medium), and emits:
   - raw_events.jsonl   : every decoded event batch (for offline replay/join)
   - snapshots.jsonl    : per-time-point stats (per stream + global), including
                          L1(GPU)/L2(CPU_PINNED)/L3(EXTERNAL) block & token counts,
-                         tree depth / trunk / branching stats, seq-gap counters
+                         tree depth / trunk / branching stats, seq-gap counters.
+                         L3 is INFERRED: the engine never emits EXTERNAL events,
+                         so a block that leaves its last tracked tier (after
+                         having been in the host cache, i.e. queued for mooncake
+                         backup) is kept as an inferred-EXTERNAL block.
   - live_tree.json     : latest full tree of all streams (refreshed periodically)
   - trees/tree_<ts>.json : per-time-point tree history (for time scrubbing)
   - tree_<stream>_final.json : full tree structure dump at shutdown
@@ -128,6 +132,10 @@ class Block:
     tokens: int
     first_seen: float
     children: set = field(default_factory=set)
+    # was resident in the host cache at some point, so a mooncake (L3) copy
+    # was queued for backup; used to infer L3 residency after the last
+    # tree-tracked tier evicts the block
+    backed_up: bool = False
 
     @property
     def medium(self) -> str:
@@ -177,12 +185,15 @@ class StreamState:
                 med = ev.medium or MEDIUM_UNKNOWN
                 if h in self.blocks:  # re-store: add residency, keep topology
                     self.blocks[h].media.add(med)
+                    if med == MEDIUM_L2:
+                        self.blocks[h].backed_up = True
                 else:
                     self.blocks[h] = Block(
                         parent=parent,
                         media={med},
                         tokens=per,
                         first_seen=now,
+                        backed_up=med == MEDIUM_L2,
                     )
                     if parent in self.blocks:
                         self.blocks[parent].children.add(h)
@@ -196,6 +207,15 @@ class StreamState:
                     continue
                 if med and med in b.media and len(b.media) > 1:
                     b.media.discard(med)   # still resident in a slower tier
+                    continue
+                # Last tracked residency is gone. A block that passed through
+                # the host cache was queued for mooncake backup, so its prefix
+                # most likely still lives in L3: keep it as an INFERRED
+                # external block instead of dropping it. The engine emits no
+                # EXTERNAL events and mooncake-side eviction is invisible, so
+                # on long runs this set can only overcount.
+                if b.backed_up:
+                    b.media = {MEDIUM_L3}
                     continue
                 self.blocks.pop(h, None)
                 if b.parent in self.blocks:
