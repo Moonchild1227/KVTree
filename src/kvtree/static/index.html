@@ -35,7 +35,7 @@
 </div>
 
 <div class="sec"><div class="sech" data-t="s1"><span class="chev">&#9660;</span>
-  <b>KV Cache</b><span class="stat">(3 panels)</span></div>
+  <b>KV Cache</b><span class="stat">(5 panels)</span></div>
   <div class="grid" id="s1">
     <div class="panel"><div class="ptit" data-agg="Resident KV Tokens | by: medium" data-rank="Resident KV Tokens | by: instance">Resident KV Tokens | by: medium</div>
       <div class="pbody"><canvas id="c_tok" height="170"></canvas>
@@ -50,6 +50,13 @@
       </div>
       <div class="pbody"><canvas id="c_pool" height="170"></canvas>
         <div class="lg" id="l_pool"></div></div></div>
+    <div class="panel"><div class="ptit">L3 Mooncake | tok/s (聚合)
+        &nbsp;<span class="stat">kv-events 不含 EXTERNAL 块，L3 只有计数器视角</span></div>
+      <div class="pbody"><canvas id="c_l3rate" height="170"></canvas>
+        <div class="lg" id="l_l3rate"></div></div></div>
+    <div class="panel"><div class="ptit">L2 Host Pool | by: state (聚合)</div>
+      <div class="pbody"><canvas id="c_l2pool" height="170"></canvas>
+        <div class="lg" id="l_l2pool"></div></div></div>
   </div></div>
 
 <div class="sec"><div class="sech" data-t="s2"><span class="chev">&#9660;</span>
@@ -103,7 +110,8 @@
         <span class="chip"><span style="display:inline-block;width:20px;height:2px;
           background:#3a4350"></span>同 session 连线(间隙=等 tool)</span>
       </div>
-      <div class="pbody"><canvas id="c_sess" height="260"></canvas>
+      <div class="pbody"><div id="sesswrap"><canvas id="c_sess"
+        height="260"></canvas></div>
         <div class="lg" id="l_sess"></div></div></div>
     <div class="panel"><div class="ptit">Concurrency | by: state</div>
       <div class="pbody"><canvas id="c_conc" height="150"></canvas>

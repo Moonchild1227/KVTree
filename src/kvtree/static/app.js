@@ -233,10 +233,38 @@ function seriesPool(){
   return out;
 }
 
+/* L2 host pool + L3 mooncake counters. The radix tree never sees EXTERNAL
+   blocks (the engine emits GPU/CPU events only), so these gauges/counters
+   are the only window into the lower tiers. Aggregate-only panels. */
+function metsRate(key){
+  const o=[];
+  for(let i=1;i<mets.length;i++){
+    const dt=mets[i].ts-mets[i-1].ts;if(dt<=0)continue;
+    const a=(mets[i].total||{})[key],b=(mets[i-1].total||{})[key];
+    if(a===undefined||b===undefined)continue;   // schema grew mid-run
+    o.push([mets[i].ts,Math.max(0,a-b)/dt]);}
+  return o;
+}
+function seriesL3Rate(){
+  if(!mets.length)return[];
+  return[
+   {name:'prefetch (L3 命中)',color:'#5794f2',vals:metsRate('prefetched_tokens_total')},
+   {name:'backup (L3 写入)',color:'#b877d9',vals:metsRate('backuped_tokens_total')}];
+}
+function seriesL2Pool(){
+  if(!mets.length)return[];
+  const g=k=>mets.map(m=>[m.ts,(m.total||{})[k]||0]);
+  return[
+   {name:'L2 host used',color:'#ff9830',vals:g('hicache_host_used_tokens')},
+   {name:'L2 host total',color:'#7b8087',vals:g('hicache_host_total_tokens')}];
+}
+
 /* ---------------- generic time-series panel ---------------- */
 const TS=[{c:'c_tok',l:'l_tok',mode:'area',f:seriesTok,unit:' tok'},
           {c:'c_pool',l:'l_pool',mode:'line',f:seriesPool,unit:' tok',log:true},
           {c:'c_blk',l:'l_blk',mode:'area',f:seriesBlk,unit:' blk'},
+          {c:'c_l3rate',l:'l_l3rate',mode:'line',f:seriesL3Rate,unit:' tok/s'},
+          {c:'c_l2pool',l:'l_l2pool',mode:'line',f:seriesL2Pool,unit:' tok'},
           {c:'c_shape',l:'l_shape',mode:'line',f:seriesShape,unit:''},
           {c:'c_evt',l:'l_evt',mode:'line',f:seriesEvt,unit:''},
           {c:'c_conc',l:'l_conc',mode:'line',f:seriesConc,unit:''}];
@@ -369,13 +397,23 @@ function sessLanes(){
 function drawSessions(){
   const c=$('c_sess');if(!c)return;
   const x=c.getContext('2d');
-  c.width=c.clientWidth;c.height=c.clientHeight;
-  x.clearRect(0,0,c.width,c.height);
   if(!turns||!turns.length){
+    c.style.height='';c.height=260;c.width=c.clientWidth;
+    x.clearRect(0,0,c.width,c.height);
     noData(x,c,'No data — 本次 run 没有产出 client/turns.jsonl'+
               '(用 --turns 指向同一次 run 的文件)');
     $('sessstats').textContent='';return;}
-  const m=xMapper(c),lanes=sessLanes(),ids=[...lanes.keys()];
+  const lanes=sessLanes(),ids=[...lanes.keys()];
+  // One fixed-height row per session; the canvas grows and #sesswrap
+  // scrolls, same as #treewrap. Squeezing a thousand sessions into a
+  // fixed panel makes every lane sub-pixel (an unreadable smear).
+  let laneH=Math.min(15,Math.max(6,(260-PADT-PADB)/ids.length));
+  if(PADT+ids.length*laneH+PADB>16000)   // canvas bitmap height ceiling
+    laneH=Math.max(2,Math.floor((16000-PADT-PADB)/ids.length));
+  c.style.height=(PADT+ids.length*laneH+PADB)+'px';
+  c.width=c.clientWidth;c.height=c.clientHeight;
+  x.clearRect(0,0,c.width,c.height);
+  const m=xMapper(c);
   x.strokeStyle='#1b1d22';x.fillStyle='#7b8087';x.font='10px Inter';
   const nt=Math.max(2,Math.floor(m.W/95));
   for(let i=0;i<=nt;i++){const t=m.t0+m.span*i/nt,px=m.X(t);
@@ -383,7 +421,6 @@ function drawSessions(){
     x.textAlign=i===0?'left':(i===nt?'right':'center');
     x.fillText(fmtTime(t,m.span),px,c.height-4);}
   x.textAlign='center';
-  const laneH=Math.min(15,(c.height-PADT-PADB)/Math.max(1,ids.length));
   const barH=Math.max(3,laneH*0.6);
   window._sessLane={laneH,ids,lanes};
   ids.forEach((sid,i)=>{
