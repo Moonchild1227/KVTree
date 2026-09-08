@@ -500,10 +500,16 @@ async function loadSelectedTree(){
 function collapseChains(n){
   if(!$('collapse').checked)return n;
   function rec(node){
-    let cur=node,count=1,tok=node.tokens,meds=new Set([node.medium]);
+    let cur=node,count=1,tok=node.tokens;const meds={};
+    meds[node.medium]=(meds[node.medium]||0)+1;
     while(cur.children.length===1){
-      cur=cur.children[0];count++;tok+=cur.tokens;meds.add(cur.medium);}
-    return{hash:node.hash,medium:meds.size===1?node.medium:'MIXED',
+      cur=cur.children[0];count++;tok+=cur.tokens;
+      meds[cur.medium]=(meds[cur.medium]||0)+1;}
+    const keys=Object.keys(meds);
+    // keep the per-tier split: with hicache eviction most long chains
+    // straddle the L1/L2 boundary, and a bare "MIXED" pill hides that
+    return{hash:node.hash,medium:keys.length===1?node.medium:'MIXED',
+           meds:keys.length>1?meds:null,
            tokens:tok,count,children:cur.children.map(rec)};}
   return rec(n);
 }
@@ -537,8 +543,13 @@ function drawTree(){
   svg.setAttribute('width',Math.max(boxW,natW));
   svg.setAttribute('height',natH);        // #treewrap scrolls; do not compress
   drawTreeSvg(g,nodes,links,XS,ysFit);
+  const mc={};(function w(ns){for(const n of ns){
+    mc[n.medium]=(mc[n.medium]||0)+1;w(n.children);}})(st.roots);
+  const SHM={GPU:'L1',CPU_PINNED:'L2',EXTERNAL:'L3',DISK:'DISK',UNKNOWN:'?'};
   $('treestats').textContent=
-    `${st.blocks} blocks / roots ${st.roots.length} / leaves ${leaf} / `+
+    `${st.blocks} blocks (${Object.entries(mc).map(([k,v])=>
+      `${SHM[k]||k}:${v}`).join(' / ')})`+
+    ` / roots ${st.roots.length} / leaves ${leaf} / `+
     `depth ${maxD+1} / row ${ysFit.toFixed(0)}px`;
   if(!view.touched){
     const k=fitAll
@@ -576,6 +587,7 @@ function drawTreeSvg(g,nodes,links,XS,YS){
     el.setAttribute('class','nd');el.setAttribute('fill',col);
     el.dataset.t=`${n.hash}\nmedium: ${n.medium}\ntokens: ${n.tokens}`+
       (n.count>1?`\nchain: ${n.count} blocks`:'')+
+      (n.meds?'\n  '+Object.entries(n.meds).map(([k,v])=>`${k} ×${v}`).join('\n  '):'')+
       `\nchildren: ${n.children.length}\ndepth: ${me.d}`;
     g.appendChild(el);}
 }
