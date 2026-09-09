@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import signal
 import sys
@@ -71,7 +72,18 @@ def _observe(a) -> int:
                         stop=metrics_stop.is_set)),
     ]
 
-    srv = make_server(Path(a.out_dir), resolve_turns(a.turns), a.port, a.bind)
+    try:
+        srv = make_server(Path(a.out_dir), resolve_turns(a.turns), a.port, a.bind)
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        # The dashboard must never take the capture down with it: the ZMQ
+        # subscriptions were already created above, and a crash here loses
+        # every event until a restart (this cost us the first 110s once).
+        print(f"[kvtree] dashboard port {a.port} busy ({e}); capture "
+              f"continues, dashboard falls back to an ephemeral port",
+              flush=True)
+        srv = make_server(Path(a.out_dir), resolve_turns(a.turns), 0, a.bind)
 
     stopping = threading.Event()
 
