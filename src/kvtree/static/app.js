@@ -1,8 +1,8 @@
 const COL={GPU:'#73bf69',CPU_PINNED:'#ff9830',EXTERNAL:'#5794f2',
-           UNKNOWN:'#8a8f98',MIXED:'#b877d9'};
+           UNKNOWN:'#8a8f98',TOMBSTONE:'#4a4e57',MIXED:'#b877d9'};
 const LBL={GPU:'L1 GPU',CPU_PINNED:'L2 CPU_PINNED',EXTERNAL:'L3 EXTERNAL',
-           UNKNOWN:'UNKNOWN'};
-const MEDS=['GPU','CPU_PINNED','EXTERNAL','UNKNOWN'];
+           UNKNOWN:'未知(观测前)',TOMBSTONE:'墓碑(无KV)'};
+const MEDS=['GPU','CPU_PINNED','EXTERNAL','UNKNOWN','TOMBSTONE'];
 // One colour per engine instance / attn-dp rank, used by the "by instance"
 // grouping. Aggregating everything hides which rank is hot.
 const PAL=['#5794f2','#73bf69','#ff9830','#b877d9','#f2cc0c','#e02f44',
@@ -474,28 +474,42 @@ function syncScrubBounds(){
   let lo=trees.findIndex(t=>t.ts>=t0);
   let hi=-1;
   for(let i=trees.length-1;i>=0;i--)if(trees[i].ts<=t1){hi=i;break;}
-  // A very narrow range can fall between dumps. Pin the scrubber to the
-  // nearest dump so its timestamp remains explicit instead of going blank.
-  if(lo<0||hi<lo){
-    const mid=(t0+t1)/2;
-    let nearest=0,dist=Infinity;
-    trees.forEach((t,i)=>{const d=Math.abs(t.ts-mid);
-      if(d<dist){dist=d;nearest=i;}});
-    lo=hi=nearest;
-  }
+  // If the active time window holds at most one dump (narrow drag-zoom, or a
+  // relative "last N min" preset on a finished run), clamping min==max would
+  // leave a dead slider that cannot be dragged at all. Fall back to the full
+  // dump history and say so; the shared cursor simply stays off-panel while
+  // the scrubbed timestamp is outside the visible window.
+  let hint='';
+  if(lo<0||hi<=lo){lo=0;hi=trees.length-1;hint='  (窗口内 dump 不足,进度条回退全量)';}
   sc.min=lo;sc.max=hi;
   const old=+sc.value;
   const next=follow?hi:Math.max(lo,Math.min(hi,old));
   sc.value=next;
-  $('tslabel').textContent=trees[next].time;
+  $('tslabel').textContent=trees[next].time+hint;
   return next!==old;
 }
 async function loadSelectedTree(){
   if(!trees.length)return;
-  const idx=+$('scrub').value,selected=trees[idx],req=++treeReq;
-  const loaded=await j('/api/tree?ts='+selected.ts);
+  const idx=+$('scrub').value,selected=trees[idx];
+  if(!selected)return;
+  const req=++treeReq;
+  // Only the selected stream is ever drawn. Asking for just it keeps each
+  // scrub step a few MB instead of a 30-45MB all-streams dump, which is what
+  // used to stall or die mid-transfer on slow/proxied links, leaving the
+  // tree frozen on the last fully-loaded dump.
+  const sel=$('stream').value;
+  const url='/api/tree?ts='+selected.ts+
+    (sel?'&stream='+encodeURIComponent(sel):'');
+  const loaded=await j(url);
   if(req!==treeReq||+$('scrub').value!==idx)return;
-  curTree=loaded;drawTree();
+  curTree=loaded;
+  // Populate the stream picker once from the first (full) reply; per-stream
+  // replies carry a single key and must not shrink the picker afterwards.
+  const selEl=$('stream');
+  if(!selEl.options.length)
+    selEl.innerHTML=Object.keys(loaded.streams||{}).sort()
+      .map(n=>`<option>${n}</option>`).join('');
+  drawTree();
 }
 function collapseChains(n){
   if(!$('collapse').checked)return n;
@@ -545,7 +559,8 @@ function drawTree(){
   drawTreeSvg(g,nodes,links,XS,ysFit);
   const mc={};(function w(ns){for(const n of ns){
     mc[n.medium]=(mc[n.medium]||0)+1;w(n.children);}})(st.roots);
-  const SHM={GPU:'L1',CPU_PINNED:'L2',EXTERNAL:'L3',DISK:'DISK',UNKNOWN:'?'};
+  const SHM={GPU:'L1',CPU_PINNED:'L2',EXTERNAL:'L3',DISK:'DISK',
+             UNKNOWN:'未知',TOMBSTONE:'墓碑'};
   $('treestats').textContent=
     `${st.blocks} blocks (${Object.entries(mc).map(([k,v])=>
       `${SHM[k]||k}:${v}`).join(' / ')})`+
@@ -619,9 +634,6 @@ async function refresh(){
   syncScrubBounds();
   if(trees.length){
     await loadSelectedTree();
-    const names=Object.keys(curTree.streams).sort(),sel2=$('stream');
-    if(sel2.options.length!==names.length)
-      sel2.innerHTML=names.map(n=>`<option>${n}</option>`).join('');
     drawTree();}
   const[a,b]=dataRange();
   $('drange').textContent=fmtTime(a)+' → '+fmtTime(b);
@@ -718,15 +730,20 @@ window.addEventListener('mousemove',e=>{
   }else if(!hover&&(!e.target.closest||!e.target.closest('canvas')))
     t.style.display='none';});
 
-$('scrub').oninput=async()=>{
+let scrubTimer=null;
+$('scrub').oninput=()=>{
   follow=false;$('follow').checked=false;
-  $('tslabel').textContent=trees[+$('scrub').value].time;
-  drawAll();                    // move the shared cursor before the fetch
-  await loadSelectedTree();};
+  const t=trees[+$('scrub').value];
+  if(!t)return;
+  $('tslabel').textContent=t.time;
+  drawAll();                    // move the shared cursor immediately
+  // debounce: dragging sweeps past many dumps; only fetch where it settles
+  clearTimeout(scrubTimer);
+  scrubTimer=setTimeout(loadSelectedTree,120);};
 $('follow').onchange=e=>{follow=e.target.checked;if(follow)refresh();};
 $('fit').onclick=()=>{fitAll=true;view.touched=false;drawTree();};
 $('collapse').onchange=drawTree;
-$('stream').onchange=drawTree;
+$('stream').onchange=()=>loadSelectedTree();
 window.onresize=()=>{drawAll();drawTree();};
 
 function timer(){
