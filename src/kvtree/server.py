@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import mimetypes
 import re
@@ -18,10 +19,18 @@ def make_handler(root: Path, turns_path: str | None):
             pass
 
         def _send(self, body: bytes, ctype="application/json"):
+            # Tree dumps run to tens of MB; over a proxied link the transfer
+            # outlives the proxy's patience and the connection dies mid-body.
+            enc = ""
+            if len(body) > 65536 and "gzip" in self.headers.get("Accept-Encoding", ""):
+                body = gzip.compress(body, compresslevel=5)
+                enc = "gzip"
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
+            if enc:
+                self.send_header("Content-Encoding", enc)
             self.end_headers()
             self.wfile.write(body)
 
@@ -139,7 +148,9 @@ def make_handler(root: Path, turns_path: str | None):
             elif u.path == "/api/turns":
                 self._send(json.dumps(self._turns()).encode())
             elif u.path == "/api/tree":
-                ts = parse_qs(u.query).get("ts", [""])[0]
+                q = parse_qs(u.query)
+                ts = q.get("ts", [""])[0]
+                stream = q.get("stream", [""])[0]
                 p = root / "trees" / f"tree_{ts}.json"
                 if not p.exists():
                     try:
@@ -148,8 +159,22 @@ def make_handler(root: Path, turns_path: str | None):
                         pass
                 if not p.exists():
                     p = root / "live_tree.json"
-                self._send(p.read_bytes() if p.exists()
-                           else b'{"ts":0,"streams":{}}')
+                if not p.exists():
+                    self._send(b'{"ts":0,"streams":{}}')
+                    return
+                if not stream:
+                    self._send(p.read_bytes())
+                    return
+                # Scrubbing only ever draws one stream; shipping all 16 turns
+                # a 30-45MB payload into a multi-MB one, which is what makes
+                # the scrubber usable over a slow or proxied link.
+                try:
+                    d = json.loads(p.read_bytes())
+                except Exception:
+                    d = {"ts": 0, "streams": {}}
+                streams = d.get("streams") or {}
+                d["streams"] = {stream: streams[stream]} if stream in streams else {}
+                self._send(json.dumps(d).encode())
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -161,7 +186,8 @@ def make_server(directory: Path, turns: str | None, port: int = 8899,
                 bind: str = "0.0.0.0") -> ThreadingHTTPServer:
     srv = ThreadingHTTPServer((bind, port), make_handler(directory, turns))
     used = Path(turns) if turns else directory / "turns" / "turns.jsonl"
-    print(f"kvtree dashboard: http://{bind}:{port}/  (data: {directory}"
+    actual = srv.server_address[1]   # port 0 picks an ephemeral one
+    print(f"kvtree dashboard: http://{bind}:{actual}/  (data: {directory}"
           + (f", turns: {used}" if used.exists() else "") + ")", flush=True)
     return srv
 
