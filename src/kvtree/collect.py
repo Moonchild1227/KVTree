@@ -347,23 +347,39 @@ class StreamState:
         """Full nested tree (hashes shortened to 12 hex chars).
 
         Iterative: chains can be 10k+ blocks deep, recursion would blow up.
+        Each node also carries phash/depth/fs/media/flags so the frontend can
+        flatten the dump into a per-block table without re-deriving anything;
+        old dumps without those keys are still accepted by the frontend
+        (it recomputes depth/phash during the walk).
         """
+        def dump_node(h: int, depth: int) -> dict:
+            b = self.blocks[h]
+            flags = []
+            if b.placeholder:
+                flags.append("placeholder")
+            if b.backed_up:
+                flags.append("backed_up")
+            return {"hash": f"{h & 0xFFFFFFFFFFFF:012x}",
+                    "phash": (f"{b.parent & 0xFFFFFFFFFFFF:012x}"
+                              if b.parent is not None else None),
+                    "depth": depth,
+                    "fs": b.first_seen,
+                    "media": sorted(b.media),
+                    "flags": flags,
+                    "medium": b.medium,
+                    "tokens": b.tokens, "children": []}
+
         def node(h: int) -> dict:
-            root = {"hash": f"{h & 0xFFFFFFFFFFFF:012x}",
-                    "medium": self.blocks[h].medium,
-                    "tokens": self.blocks[h].tokens, "children": []}
-            stack = [(h, root)]
+            root = dump_node(h, 0)
+            stack = [(h, root, 0)]
             while stack:
-                cur, obj = stack.pop()
+                cur, obj, d = stack.pop()
                 for c in sorted(self.blocks[cur].children):
                     if c not in self.blocks:
                         continue
-                    b = self.blocks[c]
-                    child = {"hash": f"{c & 0xFFFFFFFFFFFF:012x}",
-                             "medium": b.medium, "tokens": b.tokens,
-                             "children": []}
+                    child = dump_node(c, d + 1)
                     obj["children"].append(child)
-                    stack.append((c, child))
+                    stack.append((c, child, d + 1))
             return root
 
         roots = sorted(h for h, b in self.blocks.items()

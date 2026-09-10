@@ -215,6 +215,36 @@ def test_backed_block_survives_as_inferred_l3():
     assert st.blocks[1].medium == "EXTERNAL"
 
 
+def test_tree_dump_block_fields():
+    """Every dumped node must carry the fields the Blocks table needs:
+    phash (parent hash, null at roots), depth (0 at roots), fs, the sorted
+    media list, and a flags list that is always present."""
+    kve = collect.load_kv_events_module()
+    st = collect.StreamState("s")
+    st.apply(_store(kve, 1, None), 1.0, kve)
+    st.apply(_store(kve, 2, 1), 1.1, kve)
+    st.apply(_store(kve, 2, 1, medium="CPU_PINNED"), 1.2, kve)  # dual-resident
+    st.apply(_store(kve, 3, 2), 1.3, kve)
+    st.apply(_store(kve, 5, 99), 1.4, kve)    # unknown parent -> placeholder
+    dump = st.tree_dump()
+    json.dumps(dump)                          # must stay JSON-serializable
+    roots = {r["hash"]: r for r in dump["roots"]}
+    r1 = roots[f"{1 & 0xFFFFFFFFFFFF:012x}"]
+    assert r1["phash"] is None and r1["depth"] == 0 and r1["fs"] == 1.0
+    assert r1["media"] == ["GPU"] and r1["flags"] == []
+    c2 = r1["children"][0]
+    assert c2["phash"] == r1["hash"] and c2["depth"] == 1 and c2["fs"] == 1.1
+    assert c2["media"] == ["CPU_PINNED", "GPU"]     # sorted list
+    assert c2["medium"] == "GPU"                    # fastest tier wins
+    assert "backed_up" in c2["flags"]
+    c3 = c2["children"][0]
+    assert c3["phash"] == c2["hash"] and c3["depth"] == 2
+    r99 = roots[f"{99 & 0xFFFFFFFFFFFF:012x}"]
+    assert "placeholder" in r99["flags"] and r99["media"] == []
+    c5 = r99["children"][0]
+    assert c5["depth"] == 1 and c5["phash"] == r99["hash"]
+
+
 def test_make_server_ephemeral_port(tmp_path):
     """Port 0 must bind an ephemeral port and still serve (dashboard fallback
     path when the requested port is busy)."""
