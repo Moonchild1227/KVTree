@@ -135,6 +135,14 @@ run 目录里的 `turns/turns.jsonl`。
 - **Radix Tree** — roots / leaves / 深度 / 主干长度随时间变化，加任意时刻的
   node-link 树图（长链折叠成 `×N`，滚轮缩放、拖拽平移、双击复位）。
   树图一次显示**一个 rank**，用 `stream` 下拉框切换。
+- **Blocks** — 当前时间点的全量 block 表：一个 tree 节点一行，列分别是
+  hash、depth（root 为 0）、token range（父链 token 累加出的 `[offset, offset+tokens)`
+  区间）、medium（服务层级，取最快的驻留层）、media（实际驻留的所有层）、
+  tokens、children 数、first_seen、flags（`placeholder` = 父块真实写入未观测到；
+  `backed_up` = 进过 host 缓存、已排队备份 L3）。支持按 hash 前缀搜索、按 medium
+  过滤，一次渲染 200 行，点 show more 翻页。点表里的行会在树图上高亮对应节点；
+  反过来点树图里的节点（或折叠的 `×N` 链）会把该 block 的完整信息（含 phash）
+  显示在 Blocks 区顶部，并选中、滚动到表里的对应行。
 - **Sessions** — 每行一个 session，每轮一个色块（按前缀命中率上色），块之间的
   间隙是等 tool 的时间；另有 in-flight 请求数与等 tool 的 session 数。
 
