@@ -23,6 +23,9 @@ function shortName(s){const m=String(s).match(/:(\d+)$/);return m?('port '+m[1])
 const PADL=58,PADR=12,PADT=16,PADB=17;   // identical on every time panel
 const $=id=>document.getElementById(id);
 let snaps=[],trees=[],turns=null,curTree=null,mets=[];
+let curBlocks=[];                   // flattened curTree, one entry per block
+let selBlk=null;                    // hash selected in the Blocks table
+let blkShown=200;                   // rows currently rendered (show-more paging)
 // Grafana semantics: from/to hold EXPRESSIONS, resolved on every draw.
 //   null      -> the data boundary (start of everything we have)
 //   'now'     -> wall clock at draw time, so the window keeps growing
@@ -509,20 +512,113 @@ async function loadSelectedTree(){
   if(!selEl.options.length)
     selEl.innerHTML=Object.keys(loaded.streams||{}).sort()
       .map(n=>`<option>${n}</option>`).join('');
+  buildBlocks();
+  renderBlocks();
   drawTree();
+}
+/* ---------------- blocks table ----------------
+   curTree is nested; the table needs one flat row per block. depth/phash are
+   derived during the walk so dumps written before those fields existed still
+   work; offset is the cumulative ancestor token count, so the block covers
+   tokens [offset, offset+tokens) of its prefix. */
+function buildBlocks(){
+  curBlocks=[];
+  const st=curTree?curTree.streams[$('stream').value]:null;
+  if(!st)return;
+  const walk=(n,phash,depth,offset)=>{
+    curBlocks.push({hash:n.hash,
+      phash:n.phash!==undefined?n.phash:phash,
+      depth:n.depth!==undefined?n.depth:depth,
+      medium:n.medium,media:n.media||[n.medium],tokens:n.tokens,
+      children:n.children.length,fs:n.fs,flags:n.flags||[],offset});
+    for(const c of n.children)walk(c,n.hash,depth+1,offset+n.tokens);
+  };
+  for(const r of st.roots)walk(r,null,0,0);
+}
+function blkFiltered(){
+  const q=($('blkq').value||'').trim().toLowerCase(),med=$('blkmed').value;
+  return curBlocks.filter(b=>(!q||b.hash.startsWith(q))&&
+    (!med||b.medium===med));
+}
+function renderBlocks(){
+  // medium filter follows whatever the current tree actually contains
+  const medSel=$('blkmed'),keep=medSel.value;
+  const meds=[...new Set(curBlocks.map(b=>b.medium))].sort();
+  medSel.innerHTML='<option value="">全部 medium</option>'+
+    meds.map(m=>`<option${m===keep?' selected':''}>${m}</option>`).join('');
+  const list=blkFiltered();
+  $('blkcount').textContent=`${list.length} blocks`;
+  const tb=$('blkbody');tb.innerHTML='';
+  for(const b of list.slice(0,blkShown)){
+    const tr=document.createElement('tr');
+    if(b.hash===selBlk)tr.className='sel';
+    tr.innerHTML=
+      `<td class="mono">${b.hash}</td><td>${b.depth}</td>`+
+      `<td class="mono">[${b.offset}, ${b.offset+b.tokens})</td>`+
+      `<td><span class="sw" style="background:${COL[b.medium]||COL.UNKNOWN}">`+
+      `</span>${b.medium}</td><td>${b.media.join('+')||'-'}</td>`+
+      `<td>${b.tokens}</td><td>${b.children}</td>`+
+      `<td>${b.fs?fmtTime(b.fs):'-'}</td><td>${b.flags.join(',')||'-'}</td>`;
+    tr.onclick=()=>{selBlk=b.hash;
+      tb.querySelectorAll('tr.sel').forEach(r=>r.classList.remove('sel'));
+      tr.classList.add('sel');
+      highlightTreeNode(b.hash);};
+    tb.appendChild(tr);
+  }
+  $('blkmore').style.display=list.length>blkShown?'':'none';
+}
+function highlightTreeNode(hash){
+  document.querySelectorAll('#world .nd.hl').forEach(e=>
+    e.classList.remove('hl'));
+  if(!hash)return;
+  for(const el of document.querySelectorAll('#world .nd')){
+    if(el.dataset.h===hash||
+       (el.dataset.hs&&el.dataset.hs.split(' ').includes(hash))){
+      el.classList.add('hl');break;}
+  }
+}
+function showBlockDetail(hash){
+  const b=curBlocks.find(x=>x.hash===hash),d=$('blkdetail');
+  if(b){
+    d.innerHTML=
+      `<b class="mono">${b.hash}</b>  parent <span class="mono">`+
+      `${b.phash||'-'}</span>  depth ${b.depth}  `+
+      `tokens [${b.offset}, ${b.offset+b.tokens}) (${b.tokens})  `+
+      `medium <b>${b.medium}</b>  media ${b.media.join('+')||'-'}  `+
+      `children ${b.children}  first_seen ${b.fs?fmtTime(b.fs):'-'}`+
+      `  flags ${b.flags.join(',')||'-'}`;
+  }else d.innerHTML=`<b class="mono">${hash}</b>  不在当前 stream 的 block 表中`;
+  d.style.display='block';
+  // make sure the Blocks section is open and visible, then select the row
+  const body=$('s4');
+  if(body.style.display==='none'){
+    body.style.display='';
+    document.querySelector('.sech[data-t="s4"] .chev').textContent='▼';
+  }
+  d.scrollIntoView({block:'nearest'});
+  if(b){
+    selBlk=hash;
+    const idx=blkFiltered().findIndex(x=>x.hash===hash);
+    if(idx>=blkShown)blkShown=Math.ceil((idx+1)/200)*200;
+    renderBlocks();
+    const rows=$('blkbody').querySelectorAll('tr');
+    if(idx>=0&&rows[idx])rows[idx].scrollIntoView({block:'nearest'});
+  }
 }
 function collapseChains(n){
   if(!$('collapse').checked)return n;
   function rec(node){
-    let cur=node,count=1,tok=node.tokens;const meds={};
+    let cur=node,count=1,tok=node.tokens;const meds={},hashes=[node.hash];
     meds[node.medium]=(meds[node.medium]||0)+1;
     while(cur.children.length===1){
       cur=cur.children[0];count++;tok+=cur.tokens;
+      hashes.push(cur.hash);
       meds[cur.medium]=(meds[cur.medium]||0)+1;}
     const keys=Object.keys(meds);
     // keep the per-tier split: with hicache eviction most long chains
     // straddle the L1/L2 boundary, and a bare "MIXED" pill hides that
-    return{hash:node.hash,medium:keys.length===1?node.medium:'MIXED',
+    return{hash:node.hash,hashes:count>1?hashes:null,
+           medium:keys.length===1?node.medium:'MIXED',
            meds:keys.length>1?meds:null,
            tokens:tok,count,children:cur.children.map(rec)};}
   return rec(n);
@@ -600,6 +696,10 @@ function drawTreeSvg(g,nodes,links,XS,YS){
       el=document.createElementNS(NS,'circle');
       el.setAttribute('cx',x);el.setAttribute('cy',y);el.setAttribute('r',7);}
     el.setAttribute('class','nd');el.setAttribute('fill',col);
+    el.dataset.h=n.hash;                 // Blocks table finds nodes by this
+    if(n.hashes)el.dataset.hs=n.hashes.join(' ');   // pill: every chain member
+    el.addEventListener('click',e=>{e.stopPropagation();
+      highlightTreeNode(n.hash);showBlockDetail(n.hash);});
     el.dataset.t=`${n.hash}\nmedium: ${n.medium}\ntokens: ${n.tokens}`+
       (n.count>1?`\nchain: ${n.count} blocks`:'')+
       (n.meds?'\n  '+Object.entries(n.meds).map(([k,v])=>`${k} ×${v}`).join('\n  '):'')+
@@ -743,6 +843,9 @@ $('scrub').oninput=()=>{
 $('follow').onchange=e=>{follow=e.target.checked;if(follow)refresh();};
 $('fit').onclick=()=>{fitAll=true;view.touched=false;drawTree();};
 $('collapse').onchange=drawTree;
+$('blkq').oninput=()=>{blkShown=200;renderBlocks();};
+$('blkmed').onchange=()=>{blkShown=200;renderBlocks();};
+$('blkmore').onclick=()=>{blkShown+=200;renderBlocks();};
 $('stream').onchange=()=>loadSelectedTree();
 window.onresize=()=>{drawAll();drawTree();};
 

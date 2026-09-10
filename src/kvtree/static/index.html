@@ -98,6 +98,27 @@
     </div>
   </div></div>
 
+<div class="sec"><div class="sech" data-t="s4"><span class="chev">&#9660;</span>
+  <b>Blocks</b><span class="stat">每个 tree 节点一行 · 点行高亮树节点 · 点树节点看详情</span></div>
+  <div class="grid one" id="s4">
+    <div class="panel"><div class="ptit">Blocks @ cursor
+      &nbsp;<span class="stat" id="blkcount"></span></div>
+      <div id="blkdetail" style="display:none"></div>
+      <div class="row">
+        <input id="blkq" placeholder="hash 前缀…">
+        <select class="tbtn" id="blkmed"><option value="">全部 medium</option></select>
+      </div>
+      <div id="blkwrap"><table id="blktable">
+        <thead><tr><th>hash</th><th>depth</th><th>token range</th>
+          <th>medium</th><th>media</th><th>tokens</th><th>children</th>
+          <th>first_seen</th><th>flags</th></tr></thead>
+        <tbody id="blkbody"></tbody>
+      </table></div>
+      <div class="row"><button class="tbtn" id="blkmore"
+        style="display:none">show more</button></div>
+    </div>
+  </div></div>
+
 <div class="sec" id="sesssec">
   <div class="sech" data-t="s3"><span class="chev">&#9660;</span>
   <b>Sessions</b><span class="stat">(2 panels)</span></div>
@@ -122,5 +143,5 @@
         <div class="lg" id="l_conc"></div></div></div>
   </div></div>
 <div id="tip"></div>
-<script src="/static/app.js?v=20260909-2"></script>
+<script src="/static/app.js?v=20260909-3"></script>
 </body></html>
