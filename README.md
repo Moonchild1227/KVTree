@@ -121,14 +121,28 @@ run 目录里的 `turns/turns.jsonl`。
 
 - **KV Cache** — 当前仍驻留的 KV token 数与 block 数（L1 GPU / L2 CPU_PINNED /
   L3 EXTERNAL），包含 used 和 idle，不是累计写入量。`write_through` 下一个 block
-  会同时驻留多层，归属取最快的那层。
+  会同时驻留多层，归属取最快的那层。**L3 是推断值**：引擎只在 GPU/CPU 两层发
+  事件，进过 host 缓存的 block（即已排队 backup 到 mooncake）在最后一层驻留
+  被驱逐后不删除、保留为推断的 EXTERNAL 块；mooncake 侧的驱逐不可见，所以
+  长时间运行下 L3 只会偏多不会偏少。L3 的真实读写量看 L3 Mooncake 面板的
+  prefetch/backup 计数器。
 - **L1 Pool** — 引擎的 `num_used_tokens`（被运行中请求引用）、
   `kv_evictable_tokens`（驻留但未被引用）、`kv_available_tokens`，跟事件流重建
   出的驻留量画在一起互相校验。三者常差两三个数量级，用工具栏的**对数刻度**看；
   `free` 默认隐藏，点图例可显示。
+- **L3 Mooncake / L2 Host Pool** — 引擎计数器：L3 prefetch（命中）与
+  backup（写入）速率，L2 host 池水位。
 - **Radix Tree** — roots / leaves / 深度 / 主干长度随时间变化，加任意时刻的
   node-link 树图（长链折叠成 `×N`，滚轮缩放、拖拽平移、双击复位）。
   树图一次显示**一个 rank**，用 `stream` 下拉框切换。
+- **Blocks** — 当前时间点的全量 block 表：一个 tree 节点一行，列分别是
+  hash、depth（root 为 0）、token range（父链 token 累加出的 `[offset, offset+tokens)`
+  区间）、medium（服务层级，取最快的驻留层）、media（实际驻留的所有层）、
+  tokens、children 数、first_seen、flags（`placeholder` = 父块真实写入未观测到；
+  `backed_up` = 进过 host 缓存、已排队备份 L3）。支持按 hash 前缀搜索、按 medium
+  过滤，一次渲染 200 行，点 show more 翻页。点表里的行会在树图上高亮对应节点；
+  反过来点树图里的节点（或折叠的 `×N` 链）会把该 block 的完整信息（含 phash）
+  显示在 Blocks 区顶部，并选中、滚动到表里的对应行。
 - **Sessions** — 每行一个 session，每轮一个色块（按前缀命中率上色），块之间的
   间隙是等 tool 的时间；另有 in-flight 请求数与等 tool 的 session 数。
 

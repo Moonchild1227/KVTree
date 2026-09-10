@@ -27,6 +27,12 @@ WANTED = (
     "num_used_tokens", "kv_evictable_tokens", "kv_available_tokens",
     "token_usage", "cache_hit_rate", "num_running_reqs", "num_queue_reqs",
     "hicache_backup_tokens_total", "hicache_dropped_tokens_total",
+    # L2/L3 tier: host pool water level + mooncake backup/prefetch counters.
+    # kv-events never carry EXTERNAL blocks (the engine only emits GPU/CPU),
+    # so these counters are the only window into L3 activity.
+    "hicache_host_used_tokens", "hicache_host_total_tokens",
+    "backuped_tokens_total", "prefetched_tokens_total",
+    "cached_tokens_total", "prefill_effective_tokens_total",
 )
 LINE = re.compile(r"^sglang:(\w+)\{([^}]*)\}\s+([0-9.eE+-]+)$")
 

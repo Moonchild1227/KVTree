@@ -7,7 +7,11 @@ rebuilds the per-stream KV radix tree (block_hash -> parent/medium), and emits:
   - raw_events.jsonl   : every decoded event batch (for offline replay/join)
   - snapshots.jsonl    : per-time-point stats (per stream + global), including
                          L1(GPU)/L2(CPU_PINNED)/L3(EXTERNAL) block & token counts,
-                         tree depth / trunk / branching stats, seq-gap counters
+                         tree depth / trunk / branching stats, seq-gap counters.
+                         L3 is INFERRED: the engine never emits EXTERNAL events,
+                         so a block that leaves its last tracked tier (after
+                         having been in the host cache, i.e. queued for mooncake
+                         backup) is kept as an inferred-EXTERNAL block.
   - live_tree.json     : latest full tree of all streams (refreshed periodically)
   - trees/tree_<ts>.json : per-time-point tree history (for time scrubbing)
   - tree_<stream>_final.json : full tree structure dump at shutdown
@@ -51,6 +55,7 @@ MEDIUM_L2 = "CPU_PINNED"
 MEDIUM_L3 = "EXTERNAL"
 MEDIUM_DISK = "DISK"
 MEDIUM_UNKNOWN = "UNKNOWN"
+MEDIUM_TOMBSTONE = "TOMBSTONE"
 # fastest tier first: a block resident in several tiers is reported
 # as the fastest one (GPU wins over CPU_PINNED, etc.)
 MEDIUM_ORDER = (MEDIUM_L1, MEDIUM_L2, MEDIUM_DISK, MEDIUM_L3)
@@ -128,6 +133,19 @@ class Block:
     tokens: int
     first_seen: float
     children: set = field(default_factory=set)
+    # was resident in the host cache at some point, so a mooncake (L3) copy
+    # was queued for backup; used to infer L3 residency after the last
+    # tree-tracked tier evicts the block
+    backed_up: bool = False
+    # created to hold a child whose parent hash was never observed (e.g.
+    # written before capture started); adopted into the real tree when the
+    # parent's BlockStored finally arrives
+    placeholder: bool = False
+    # structurally present but holds no KV: the engine frees an unbacked
+    # device's layers but keeps a node that still has children registered
+    # (_delete_unbacked_device_leaf in unified_tree_core.py), so mirror that
+    # instead of deleting the node and re-rooting its subtree
+    tombstone: bool = False
 
     @property
     def medium(self) -> str:
@@ -138,9 +156,13 @@ class Block:
         entirely. Residency is a set; the tier reported is the fastest one
         present, which is what "which level serves this block" means.
         """
+        if self.placeholder:
+            return MEDIUM_UNKNOWN
         for m in MEDIUM_ORDER:
             if m in self.media:
                 return m
+        if self.tombstone:
+            return MEDIUM_TOMBSTONE
         return MEDIUM_UNKNOWN
 
 
@@ -175,17 +197,45 @@ class StreamState:
             per = ev.block_size or (len(ev.token_ids) // n if n else 0)
             for h in ev.block_hashes:
                 med = ev.medium or MEDIUM_UNKNOWN
+                if parent is not None and parent not in self.blocks:
+                    # The parent was never observed (written before capture
+                    # started, or its events were lost). Create a structural
+                    # placeholder so every child chains onto one shared
+                    # unknown trunk instead of dangling as an independent
+                    # root; the placeholder is adopted when the parent's
+                    # BlockStored finally arrives.
+                    self.blocks[parent] = Block(parent=None, media=set(),
+                                                tokens=0, first_seen=now,
+                                                placeholder=True)
                 if h in self.blocks:  # re-store: add residency, keep topology
-                    self.blocks[h].media.add(med)
+                    b = self.blocks[h]
+                    if b.placeholder:
+                        # The real write arrives: adopt the placeholder into
+                        # the true tree. Children are already attached to the
+                        # node, so the whole subtree reconnects at once.
+                        # first_seen stays a lower bound (>= its oldest child).
+                        b.placeholder = False
+                        b.tombstone = False
+                        b.parent = parent
+                        b.tokens = per
+                        b.media = {med}
+                        b.backed_up = med == MEDIUM_L2
+                    else:
+                        b.media.add(med)
+                        if med == MEDIUM_L2:
+                            b.backed_up = True
+                        if b.tombstone and b.media:
+                            b.tombstone = False
                 else:
                     self.blocks[h] = Block(
                         parent=parent,
                         media={med},
                         tokens=per,
                         first_seen=now,
+                        backed_up=med == MEDIUM_L2,
                     )
-                    if parent in self.blocks:
-                        self.blocks[parent].children.add(h)
+                if parent in self.blocks:
+                    self.blocks[parent].children.add(h)
                 parent = h  # chain: block i+1's parent is block i
         elif isinstance(ev, kve.BlockRemoved):
             self.removed += 1
@@ -196,6 +246,30 @@ class StreamState:
                     continue
                 if med and med in b.media and len(b.media) > 1:
                     b.media.discard(med)   # still resident in a slower tier
+                    continue
+                if b.placeholder:
+                    # We never saw this block's write, so its residency is
+                    # unknown; deleting it would re-break every chain hanging
+                    # on it. Keep it grey -- a later re-store adopts it.
+                    continue
+                # Last tracked residency is gone. A block that passed through
+                # the host cache was queued for mooncake backup, so its prefix
+                # most likely still lives in L3: keep it as an INFERRED
+                # external block instead of dropping it. The engine emits no
+                # EXTERNAL events and mooncake-side eviction is invisible, so
+                # on long runs this set can only overcount.
+                if b.backed_up:
+                    b.media = {MEDIUM_L3}
+                    b.tombstone = False
+                    continue
+                if b.children:
+                    # The engine frees an unbacked node's device layers but
+                    # keeps the node as a structural tombstone while it still
+                    # has children (unified_tree_core.py
+                    # _delete_unbacked_device_leaf). Mirror that: keep the
+                    # structure, drop the KV residency, never re-root.
+                    b.media = set()
+                    b.tombstone = True
                     continue
                 self.blocks.pop(h, None)
                 if b.parent in self.blocks:
@@ -218,7 +292,8 @@ class StreamState:
         if not self.blocks:
             return {"roots": 0, "leaves": 0, "max_depth": 0,
                     "mean_leaf_depth": 0.0, "trunk_tokens": 0,
-                    "trunk_blocks": 0, "branch_nodes": 0}
+                    "trunk_blocks": 0, "branch_nodes": 0,
+                    "placeholder_blocks": 0, "tombstone_blocks": 0}
         roots = [h for h, b in self.blocks.items()
                  if b.parent not in self.blocks]
         leaves = [h for h, b in self.blocks.items() if not b.children]
@@ -262,29 +337,49 @@ class StreamState:
                 "mean_leaf_depth": round(mean_depth, 2),
                 "trunk_tokens": best_trunk_tokens,
                 "trunk_blocks": best_trunk_blocks,
-                "branch_nodes": branch_nodes}
+                "branch_nodes": branch_nodes,
+                "placeholder_blocks": sum(1 for b in self.blocks.values()
+                                          if b.placeholder),
+                "tombstone_blocks": sum(1 for b in self.blocks.values()
+                                        if b.tombstone)}
 
     def tree_dump(self) -> dict:
         """Full nested tree (hashes shortened to 12 hex chars).
 
         Iterative: chains can be 10k+ blocks deep, recursion would blow up.
+        Each node also carries phash/depth/fs/media/flags so the frontend can
+        flatten the dump into a per-block table without re-deriving anything;
+        old dumps without those keys are still accepted by the frontend
+        (it recomputes depth/phash during the walk).
         """
+        def dump_node(h: int, depth: int) -> dict:
+            b = self.blocks[h]
+            flags = []
+            if b.placeholder:
+                flags.append("placeholder")
+            if b.backed_up:
+                flags.append("backed_up")
+            return {"hash": f"{h & 0xFFFFFFFFFFFF:012x}",
+                    "phash": (f"{b.parent & 0xFFFFFFFFFFFF:012x}"
+                              if b.parent is not None else None),
+                    "depth": depth,
+                    "fs": b.first_seen,
+                    "media": sorted(b.media),
+                    "flags": flags,
+                    "medium": b.medium,
+                    "tokens": b.tokens, "children": []}
+
         def node(h: int) -> dict:
-            root = {"hash": f"{h & 0xFFFFFFFFFFFF:012x}",
-                    "medium": self.blocks[h].medium,
-                    "tokens": self.blocks[h].tokens, "children": []}
-            stack = [(h, root)]
+            root = dump_node(h, 0)
+            stack = [(h, root, 0)]
             while stack:
-                cur, obj = stack.pop()
+                cur, obj, d = stack.pop()
                 for c in sorted(self.blocks[cur].children):
                     if c not in self.blocks:
                         continue
-                    b = self.blocks[c]
-                    child = {"hash": f"{c & 0xFFFFFFFFFFFF:012x}",
-                             "medium": b.medium, "tokens": b.tokens,
-                             "children": []}
+                    child = dump_node(c, d + 1)
                     obj["children"].append(child)
-                    stack.append((c, child))
+                    stack.append((c, child, d + 1))
             return root
 
         roots = sorted(h for h, b in self.blocks.items()

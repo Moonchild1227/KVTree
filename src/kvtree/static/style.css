@@ -48,6 +48,9 @@ h1{font-size:14px;font-weight:600;margin:0 8px 0 0}
 svg{display:block;cursor:grab;background:#0b0c0e;border-radius:2px}
 svg:focus{outline:1px solid #5794f2;outline-offset:-1px}
 #treewrap{max-height:520px;overflow:auto;background:#0b0c0e;border-radius:2px}
+#sesswrap{flex:1;min-width:0;max-height:440px;overflow-y:auto;background:#0b0c0e;
+  border-radius:2px}
+#sesswrap canvas{width:100%;display:block}
 svg:active{cursor:grabbing}
 .lnk{fill:none;stroke:#3a4350;stroke-width:1.2}
 .nd{stroke:#0b0c0e;stroke-width:1}
@@ -55,3 +58,22 @@ svg:active{cursor:grabbing}
 #tip{position:fixed;pointer-events:none;background:#1c232de6;
      border:1px solid #3a4350;border-radius:3px;padding:6px 10px;display:none;
      white-space:pre;z-index:99;font-size:12px;font-family:Consolas,monospace}
+.mono{font-family:Consolas,monospace;font-size:11px}
+#blkq{background:#0b0c0e;border:1px solid #2c3235;color:#ccccdc;
+      border-radius:2px;padding:4px 7px;font-size:12px;width:180px}
+#blkdetail{background:#0b0c0e;border:1px solid #2c3235;border-radius:2px;
+           padding:6px 9px;margin:4px 2px;font-size:12px;color:#ccccdc}
+#blkdetail b{color:#e8e8f0}
+#blkwrap{max-height:480px;overflow:auto;margin:4px 0}
+#blktable{border-collapse:collapse;font-size:11px;width:100%}
+#blktable th{position:sticky;top:0;background:#181b1f;color:#7b8087;
+             font-weight:500;text-align:left;padding:3px 8px;
+             border-bottom:1px solid #2c3235}
+#blktable td{padding:2px 8px;border-bottom:1px solid #1b1d22;
+             white-space:nowrap;color:#a8aebb}
+#blktable tbody tr{cursor:pointer}
+#blktable tbody tr:hover{background:#22252b}
+#blktable tbody tr.sel{background:#1c2a42}
+#blktable .sw{display:inline-block;width:9px;height:9px;border-radius:2px;
+              margin-right:5px}
+.nd.hl{stroke:#fff;stroke-width:2.5}

@@ -1,8 +1,8 @@
 const COL={GPU:'#73bf69',CPU_PINNED:'#ff9830',EXTERNAL:'#5794f2',
-           UNKNOWN:'#8a8f98',MIXED:'#8ab8ff'};
+           UNKNOWN:'#8a8f98',TOMBSTONE:'#4a4e57',MIXED:'#b877d9'};
 const LBL={GPU:'L1 GPU',CPU_PINNED:'L2 CPU_PINNED',EXTERNAL:'L3 EXTERNAL',
-           UNKNOWN:'UNKNOWN'};
-const MEDS=['GPU','CPU_PINNED','EXTERNAL','UNKNOWN'];
+           UNKNOWN:'未知(观测前)',TOMBSTONE:'墓碑(无KV)'};
+const MEDS=['GPU','CPU_PINNED','EXTERNAL','UNKNOWN','TOMBSTONE'];
 // One colour per engine instance / attn-dp rank, used by the "by instance"
 // grouping. Aggregating everything hides which rank is hot.
 const PAL=['#5794f2','#73bf69','#ff9830','#b877d9','#f2cc0c','#e02f44',
@@ -23,6 +23,9 @@ function shortName(s){const m=String(s).match(/:(\d+)$/);return m?('port '+m[1])
 const PADL=58,PADR=12,PADT=16,PADB=17;   // identical on every time panel
 const $=id=>document.getElementById(id);
 let snaps=[],trees=[],turns=null,curTree=null,mets=[];
+let curBlocks=[];                   // flattened curTree, one entry per block
+let selBlk=null;                    // hash selected in the Blocks table
+let blkShown=200;                   // rows currently rendered (show-more paging)
 // Grafana semantics: from/to hold EXPRESSIONS, resolved on every draw.
 //   null      -> the data boundary (start of everything we have)
 //   'now'     -> wall clock at draw time, so the window keeps growing
@@ -233,10 +236,38 @@ function seriesPool(){
   return out;
 }
 
+/* L2 host pool + L3 mooncake counters. The radix tree never sees EXTERNAL
+   blocks (the engine emits GPU/CPU events only), so these gauges/counters
+   are the only window into the lower tiers. Aggregate-only panels. */
+function metsRate(key){
+  const o=[];
+  for(let i=1;i<mets.length;i++){
+    const dt=mets[i].ts-mets[i-1].ts;if(dt<=0)continue;
+    const a=(mets[i].total||{})[key],b=(mets[i-1].total||{})[key];
+    if(a===undefined||b===undefined)continue;   // schema grew mid-run
+    o.push([mets[i].ts,Math.max(0,a-b)/dt]);}
+  return o;
+}
+function seriesL3Rate(){
+  if(!mets.length)return[];
+  return[
+   {name:'prefetch (L3 命中)',color:'#5794f2',vals:metsRate('prefetched_tokens_total')},
+   {name:'backup (L3 写入)',color:'#b877d9',vals:metsRate('backuped_tokens_total')}];
+}
+function seriesL2Pool(){
+  if(!mets.length)return[];
+  const g=k=>mets.map(m=>[m.ts,(m.total||{})[k]||0]);
+  return[
+   {name:'L2 host used',color:'#ff9830',vals:g('hicache_host_used_tokens')},
+   {name:'L2 host total',color:'#7b8087',vals:g('hicache_host_total_tokens')}];
+}
+
 /* ---------------- generic time-series panel ---------------- */
 const TS=[{c:'c_tok',l:'l_tok',mode:'area',f:seriesTok,unit:' tok'},
           {c:'c_pool',l:'l_pool',mode:'line',f:seriesPool,unit:' tok',log:true},
           {c:'c_blk',l:'l_blk',mode:'area',f:seriesBlk,unit:' blk'},
+          {c:'c_l3rate',l:'l_l3rate',mode:'line',f:seriesL3Rate,unit:' tok/s'},
+          {c:'c_l2pool',l:'l_l2pool',mode:'line',f:seriesL2Pool,unit:' tok'},
           {c:'c_shape',l:'l_shape',mode:'line',f:seriesShape,unit:''},
           {c:'c_evt',l:'l_evt',mode:'line',f:seriesEvt,unit:''},
           {c:'c_conc',l:'l_conc',mode:'line',f:seriesConc,unit:''}];
@@ -369,13 +400,23 @@ function sessLanes(){
 function drawSessions(){
   const c=$('c_sess');if(!c)return;
   const x=c.getContext('2d');
-  c.width=c.clientWidth;c.height=c.clientHeight;
-  x.clearRect(0,0,c.width,c.height);
   if(!turns||!turns.length){
+    c.style.height='';c.height=260;c.width=c.clientWidth;
+    x.clearRect(0,0,c.width,c.height);
     noData(x,c,'No data — 本次 run 没有产出 client/turns.jsonl'+
               '(用 --turns 指向同一次 run 的文件)');
     $('sessstats').textContent='';return;}
-  const m=xMapper(c),lanes=sessLanes(),ids=[...lanes.keys()];
+  const lanes=sessLanes(),ids=[...lanes.keys()];
+  // One fixed-height row per session; the canvas grows and #sesswrap
+  // scrolls, same as #treewrap. Squeezing a thousand sessions into a
+  // fixed panel makes every lane sub-pixel (an unreadable smear).
+  let laneH=Math.min(15,Math.max(6,(260-PADT-PADB)/ids.length));
+  if(PADT+ids.length*laneH+PADB>16000)   // canvas bitmap height ceiling
+    laneH=Math.max(2,Math.floor((16000-PADT-PADB)/ids.length));
+  c.style.height=(PADT+ids.length*laneH+PADB)+'px';
+  c.width=c.clientWidth;c.height=c.clientHeight;
+  x.clearRect(0,0,c.width,c.height);
+  const m=xMapper(c);
   x.strokeStyle='#1b1d22';x.fillStyle='#7b8087';x.font='10px Inter';
   const nt=Math.max(2,Math.floor(m.W/95));
   for(let i=0;i<=nt;i++){const t=m.t0+m.span*i/nt,px=m.X(t);
@@ -383,7 +424,6 @@ function drawSessions(){
     x.textAlign=i===0?'left':(i===nt?'right':'center');
     x.fillText(fmtTime(t,m.span),px,c.height-4);}
   x.textAlign='center';
-  const laneH=Math.min(15,(c.height-PADT-PADB)/Math.max(1,ids.length));
   const barH=Math.max(3,laneH*0.6);
   window._sessLane={laneH,ids,lanes};
   ids.forEach((sid,i)=>{
@@ -437,36 +477,149 @@ function syncScrubBounds(){
   let lo=trees.findIndex(t=>t.ts>=t0);
   let hi=-1;
   for(let i=trees.length-1;i>=0;i--)if(trees[i].ts<=t1){hi=i;break;}
-  // A very narrow range can fall between dumps. Pin the scrubber to the
-  // nearest dump so its timestamp remains explicit instead of going blank.
-  if(lo<0||hi<lo){
-    const mid=(t0+t1)/2;
-    let nearest=0,dist=Infinity;
-    trees.forEach((t,i)=>{const d=Math.abs(t.ts-mid);
-      if(d<dist){dist=d;nearest=i;}});
-    lo=hi=nearest;
-  }
+  // If the active time window holds at most one dump (narrow drag-zoom, or a
+  // relative "last N min" preset on a finished run), clamping min==max would
+  // leave a dead slider that cannot be dragged at all. Fall back to the full
+  // dump history and say so; the shared cursor simply stays off-panel while
+  // the scrubbed timestamp is outside the visible window.
+  let hint='';
+  if(lo<0||hi<=lo){lo=0;hi=trees.length-1;hint='  (窗口内 dump 不足,进度条回退全量)';}
   sc.min=lo;sc.max=hi;
   const old=+sc.value;
   const next=follow?hi:Math.max(lo,Math.min(hi,old));
   sc.value=next;
-  $('tslabel').textContent=trees[next].time;
+  $('tslabel').textContent=trees[next].time+hint;
   return next!==old;
 }
 async function loadSelectedTree(){
   if(!trees.length)return;
-  const idx=+$('scrub').value,selected=trees[idx],req=++treeReq;
-  const loaded=await j('/api/tree?ts='+selected.ts);
+  const idx=+$('scrub').value,selected=trees[idx];
+  if(!selected)return;
+  const req=++treeReq;
+  // Only the selected stream is ever drawn. Asking for just it keeps each
+  // scrub step a few MB instead of a 30-45MB all-streams dump, which is what
+  // used to stall or die mid-transfer on slow/proxied links, leaving the
+  // tree frozen on the last fully-loaded dump.
+  const sel=$('stream').value;
+  const url='/api/tree?ts='+selected.ts+
+    (sel?'&stream='+encodeURIComponent(sel):'');
+  const loaded=await j(url);
   if(req!==treeReq||+$('scrub').value!==idx)return;
-  curTree=loaded;drawTree();
+  curTree=loaded;
+  // Populate the stream picker once from the first (full) reply; per-stream
+  // replies carry a single key and must not shrink the picker afterwards.
+  const selEl=$('stream');
+  if(!selEl.options.length)
+    selEl.innerHTML=Object.keys(loaded.streams||{}).sort()
+      .map(n=>`<option>${n}</option>`).join('');
+  buildBlocks();
+  renderBlocks();
+  drawTree();
+}
+/* ---------------- blocks table ----------------
+   curTree is nested; the table needs one flat row per block. depth/phash are
+   derived during the walk so dumps written before those fields existed still
+   work; offset is the cumulative ancestor token count, so the block covers
+   tokens [offset, offset+tokens) of its prefix. */
+function buildBlocks(){
+  curBlocks=[];
+  const st=curTree?curTree.streams[$('stream').value]:null;
+  if(!st)return;
+  const walk=(n,phash,depth,offset)=>{
+    curBlocks.push({hash:n.hash,
+      phash:n.phash!==undefined?n.phash:phash,
+      depth:n.depth!==undefined?n.depth:depth,
+      medium:n.medium,media:n.media||[n.medium],tokens:n.tokens,
+      children:n.children.length,fs:n.fs,flags:n.flags||[],offset});
+    for(const c of n.children)walk(c,n.hash,depth+1,offset+n.tokens);
+  };
+  for(const r of st.roots)walk(r,null,0,0);
+}
+function blkFiltered(){
+  const q=($('blkq').value||'').trim().toLowerCase(),med=$('blkmed').value;
+  return curBlocks.filter(b=>(!q||b.hash.startsWith(q))&&
+    (!med||b.medium===med));
+}
+function renderBlocks(){
+  // medium filter follows whatever the current tree actually contains
+  const medSel=$('blkmed'),keep=medSel.value;
+  const meds=[...new Set(curBlocks.map(b=>b.medium))].sort();
+  medSel.innerHTML='<option value="">全部 medium</option>'+
+    meds.map(m=>`<option${m===keep?' selected':''}>${m}</option>`).join('');
+  const list=blkFiltered();
+  $('blkcount').textContent=`${list.length} blocks`;
+  const tb=$('blkbody');tb.innerHTML='';
+  for(const b of list.slice(0,blkShown)){
+    const tr=document.createElement('tr');
+    if(b.hash===selBlk)tr.className='sel';
+    tr.innerHTML=
+      `<td class="mono">${b.hash}</td><td>${b.depth}</td>`+
+      `<td class="mono">[${b.offset}, ${b.offset+b.tokens})</td>`+
+      `<td><span class="sw" style="background:${COL[b.medium]||COL.UNKNOWN}">`+
+      `</span>${b.medium}</td><td>${b.media.join('+')||'-'}</td>`+
+      `<td>${b.tokens}</td><td>${b.children}</td>`+
+      `<td>${b.fs?fmtTime(b.fs):'-'}</td><td>${b.flags.join(',')||'-'}</td>`;
+    tr.onclick=()=>{selBlk=b.hash;
+      tb.querySelectorAll('tr.sel').forEach(r=>r.classList.remove('sel'));
+      tr.classList.add('sel');
+      highlightTreeNode(b.hash);};
+    tb.appendChild(tr);
+  }
+  $('blkmore').style.display=list.length>blkShown?'':'none';
+}
+function highlightTreeNode(hash){
+  document.querySelectorAll('#world .nd.hl').forEach(e=>
+    e.classList.remove('hl'));
+  if(!hash)return;
+  for(const el of document.querySelectorAll('#world .nd')){
+    if(el.dataset.h===hash||
+       (el.dataset.hs&&el.dataset.hs.split(' ').includes(hash))){
+      el.classList.add('hl');break;}
+  }
+}
+function showBlockDetail(hash){
+  const b=curBlocks.find(x=>x.hash===hash),d=$('blkdetail');
+  if(b){
+    d.innerHTML=
+      `<b class="mono">${b.hash}</b>  parent <span class="mono">`+
+      `${b.phash||'-'}</span>  depth ${b.depth}  `+
+      `tokens [${b.offset}, ${b.offset+b.tokens}) (${b.tokens})  `+
+      `medium <b>${b.medium}</b>  media ${b.media.join('+')||'-'}  `+
+      `children ${b.children}  first_seen ${b.fs?fmtTime(b.fs):'-'}`+
+      `  flags ${b.flags.join(',')||'-'}`;
+  }else d.innerHTML=`<b class="mono">${hash}</b>  不在当前 stream 的 block 表中`;
+  d.style.display='block';
+  // make sure the Blocks section is open and visible, then select the row
+  const body=$('s4');
+  if(body.style.display==='none'){
+    body.style.display='';
+    document.querySelector('.sech[data-t="s4"] .chev').textContent='▼';
+  }
+  d.scrollIntoView({block:'nearest'});
+  if(b){
+    selBlk=hash;
+    const idx=blkFiltered().findIndex(x=>x.hash===hash);
+    if(idx>=blkShown)blkShown=Math.ceil((idx+1)/200)*200;
+    renderBlocks();
+    const rows=$('blkbody').querySelectorAll('tr');
+    if(idx>=0&&rows[idx])rows[idx].scrollIntoView({block:'nearest'});
+  }
 }
 function collapseChains(n){
   if(!$('collapse').checked)return n;
   function rec(node){
-    let cur=node,count=1,tok=node.tokens,meds=new Set([node.medium]);
+    let cur=node,count=1,tok=node.tokens;const meds={},hashes=[node.hash];
+    meds[node.medium]=(meds[node.medium]||0)+1;
     while(cur.children.length===1){
-      cur=cur.children[0];count++;tok+=cur.tokens;meds.add(cur.medium);}
-    return{hash:node.hash,medium:meds.size===1?node.medium:'MIXED',
+      cur=cur.children[0];count++;tok+=cur.tokens;
+      hashes.push(cur.hash);
+      meds[cur.medium]=(meds[cur.medium]||0)+1;}
+    const keys=Object.keys(meds);
+    // keep the per-tier split: with hicache eviction most long chains
+    // straddle the L1/L2 boundary, and a bare "MIXED" pill hides that
+    return{hash:node.hash,hashes:count>1?hashes:null,
+           medium:keys.length===1?node.medium:'MIXED',
+           meds:keys.length>1?meds:null,
            tokens:tok,count,children:cur.children.map(rec)};}
   return rec(n);
 }
@@ -500,8 +653,14 @@ function drawTree(){
   svg.setAttribute('width',Math.max(boxW,natW));
   svg.setAttribute('height',natH);        // #treewrap scrolls; do not compress
   drawTreeSvg(g,nodes,links,XS,ysFit);
+  const mc={};(function w(ns){for(const n of ns){
+    mc[n.medium]=(mc[n.medium]||0)+1;w(n.children);}})(st.roots);
+  const SHM={GPU:'L1',CPU_PINNED:'L2',EXTERNAL:'L3',DISK:'DISK',
+             UNKNOWN:'未知',TOMBSTONE:'墓碑'};
   $('treestats').textContent=
-    `${st.blocks} blocks / roots ${st.roots.length} / leaves ${leaf} / `+
+    `${st.blocks} blocks (${Object.entries(mc).map(([k,v])=>
+      `${SHM[k]||k}:${v}`).join(' / ')})`+
+    ` / roots ${st.roots.length} / leaves ${leaf} / `+
     `depth ${maxD+1} / row ${ysFit.toFixed(0)}px`;
   if(!view.touched){
     const k=fitAll
@@ -537,8 +696,13 @@ function drawTreeSvg(g,nodes,links,XS,YS){
       el=document.createElementNS(NS,'circle');
       el.setAttribute('cx',x);el.setAttribute('cy',y);el.setAttribute('r',7);}
     el.setAttribute('class','nd');el.setAttribute('fill',col);
+    el.dataset.h=n.hash;                 // Blocks table finds nodes by this
+    if(n.hashes)el.dataset.hs=n.hashes.join(' ');   // pill: every chain member
+    el.addEventListener('click',e=>{e.stopPropagation();
+      highlightTreeNode(n.hash);showBlockDetail(n.hash);});
     el.dataset.t=`${n.hash}\nmedium: ${n.medium}\ntokens: ${n.tokens}`+
       (n.count>1?`\nchain: ${n.count} blocks`:'')+
+      (n.meds?'\n  '+Object.entries(n.meds).map(([k,v])=>`${k} ×${v}`).join('\n  '):'')+
       `\nchildren: ${n.children.length}\ndepth: ${me.d}`;
     g.appendChild(el);}
 }
@@ -570,9 +734,6 @@ async function refresh(){
   syncScrubBounds();
   if(trees.length){
     await loadSelectedTree();
-    const names=Object.keys(curTree.streams).sort(),sel2=$('stream');
-    if(sel2.options.length!==names.length)
-      sel2.innerHTML=names.map(n=>`<option>${n}</option>`).join('');
     drawTree();}
   const[a,b]=dataRange();
   $('drange').textContent=fmtTime(a)+' → '+fmtTime(b);
@@ -669,15 +830,23 @@ window.addEventListener('mousemove',e=>{
   }else if(!hover&&(!e.target.closest||!e.target.closest('canvas')))
     t.style.display='none';});
 
-$('scrub').oninput=async()=>{
+let scrubTimer=null;
+$('scrub').oninput=()=>{
   follow=false;$('follow').checked=false;
-  $('tslabel').textContent=trees[+$('scrub').value].time;
-  drawAll();                    // move the shared cursor before the fetch
-  await loadSelectedTree();};
+  const t=trees[+$('scrub').value];
+  if(!t)return;
+  $('tslabel').textContent=t.time;
+  drawAll();                    // move the shared cursor immediately
+  // debounce: dragging sweeps past many dumps; only fetch where it settles
+  clearTimeout(scrubTimer);
+  scrubTimer=setTimeout(loadSelectedTree,120);};
 $('follow').onchange=e=>{follow=e.target.checked;if(follow)refresh();};
 $('fit').onclick=()=>{fitAll=true;view.touched=false;drawTree();};
 $('collapse').onchange=drawTree;
-$('stream').onchange=drawTree;
+$('blkq').oninput=()=>{blkShown=200;renderBlocks();};
+$('blkmed').onchange=()=>{blkShown=200;renderBlocks();};
+$('blkmore').onclick=()=>{blkShown+=200;renderBlocks();};
+$('stream').onchange=()=>loadSelectedTree();
 window.onresize=()=>{drawAll();drawTree();};
 
 function timer(){
